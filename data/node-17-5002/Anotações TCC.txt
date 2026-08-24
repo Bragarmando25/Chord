@@ -1,0 +1,42 @@
+* Introdução (apresentar o problema de pesquisa, definir as hipóteses, contribuição, objetivos)
+
+* Revisão Bibliográfica (Procurar os artigos, livros e materiais diversos que possui relação com seu trabalho) 5 a 10 anos (se tiver algum muito importante com mais de 10 anos, pode colocar)
+
+Metodologia
+
+Resultados
+
+Discussão
+
+Conclusão
+
+
+A abordagem Frequentista apresenta uma praticidade na resolução de problemas
+para modelos cuja a função que representa a fração de falhas ao longo do tempo podem ser
+representados em uma forma fechada, o que nem é sempre possível, tornando o processo mais
+complexo. Na abordagem Bayesiana a inferência é baseada na distribuição a posteriori dos
+parâmetros, que é obtida combinando-se, via teorema de Bayes, a informação disponível a
+priori com a informação proveniente dos dados observados. Por muitos anos a inferência Bayesiana fora pouco explorada devido a sua elevada
+complexidade na construção de seus modelos. Esta abordagem requer a resolução de integrais
+cujo número de dimensões é igual ao número de variáveis avaliadas, o que tornava os cálculos
+13
+
+Tanto a abordagem Bayesiana quanto a abordagem Frequentista buscam, a sua maneira,
+resolver o problema fundamental da estatística, que é a inferência, ou seja, quais as declarações
+que podem ser feitas a partir da coleta de dados à respeito de características desconhecidas do
+mecanismo ou processo que deu origem a estes dados. A grande questão neste processo é em
+como obter tais conclusões a partir de dados numéricos observados. 
+
+A grande diferença entre o paradigma Bayesiano e o Frequentista está na aplicação do
+termo “probabilidade”. Esta se trata puramente de uma distinção de definições não havendo
+uma abordagem dita correta ou errada. A abordagem Frequentista, restringe este termo como
+sendo a probabilidade “p”, o valor que resume um conjunto de replicações hipotéticas de um
+dado fenômeno. Já para a abordagem Bayesiana, a definição do termo “probabilidade” busca
+por se quantificar a incerteza a respeito de um dado fenômeno em seus valores desconhecidos
+
+O paradigma Bayesiano apresenta vantagens sobre a abordagem Frequentista em termos
+de simplicidade de aplicação, pelo fato de possuir uma metodologia cuja aplicação é extensível
+a modelos complexos de maneira direta. Além disso, a exatidão dos resultados é maior dado a
+uma maior sensibilidade dos modelos especialmente quando se trata de modelos com um
+limitado número de amostras. E por fim, na coerência nas análises pois este é um modelo capaz
+de incorporar o conhecimento prévio a respeito de um dado evento
