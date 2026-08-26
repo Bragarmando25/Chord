@@ -187,4 +187,3 @@ npm.cmd test
 ```
 
 A suíte verifica aritmética circular, intervalos do anel, criação de nós, hash, inserção, recuperação, catálogo vazio, segurança dos nomes, escolha dos sucessores de replicação, roteamento por HTTP, saída graciosa e recuperação após falha abrupta.
-Durante a demonstração, destaque que a busca pode entrar por qualquer participante, enquanto o armazenamento é decidido pelo hash e a disponibilidade é aumentada pelas duas réplicas nos sucessores.
