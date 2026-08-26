@@ -1,119 +1,203 @@
-# Chord em Node.js
+# Rede P2P Chord com replicação
 
-Implementação didática de um anel Chord com espaço fixo de identificadores `1..32`
-(`m = 5`). Cada nó mantém cinco entradas na finger table e oferece a operação
-`join` por HTTP. Requer Node.js 18 ou superior e não usa pacotes externos.
+Projeto didático de Sistemas Distribuídos que implementa uma rede P2P baseada no protocolo Chord. A aplicação permite criar nós, visualizar o anel, inserir e recuperar arquivos e acompanhar a distribuição das réplicas.
 
-## Executar
+O espaço de identificadores possui 32 posições (`1..32`). Como `32 = 2⁵`, cada nó mantém cinco entradas na finger table. O projeto requer Node.js 18 ou superior e utiliza somente módulos nativos.
 
-Inicie o painel controlador, que utiliza a porta `5000`:
+## Funcionalidades
+
+- criação de um novo anel Chord;
+- entrada de novos nós por meio de um nó existente;
+- atualização de predecessor, sucessor e finger tables;
+- roteamento distribuído com `findSuccessor`;
+- inserção e recuperação de arquivos por qualquer nó;
+- catálogo distribuído com os nomes dos arquivos da rede;
+- uma cópia original e até duas réplicas por arquivo;
+- migração de arquivos quando a responsabilidade dos hashes muda;
+- transferência dos arquivos durante a saída graciosa de um nó;
+- recuperação por réplica quando o proprietário não responde;
+- painel web para visualizar topologia, arquivos e locais de armazenamento.
+
+## Organização do projeto
+
+```text
+src/
+├── server.js       # gerenciador dos nós locais, porta 5000
+├── node-server.js  # servidor HTTP individual de cada nó
+├── chord-node.js   # algoritmo Chord, arquivos e replicação
+└── ring.js         # hash e operações do anel circular
+
+public/              # interfaces web
+test/ring.test.js    # testes automatizados
+data/                # armazenamento local gerado durante a execução
+```
+
+A pasta `data/` não faz parte do controle de versão. Ela é criada automaticamente conforme arquivos são inseridos na rede.
+
+## Iniciando a aplicação
+
+Com Node.js 18 ou mais recente instalado, execute:
 
 ```bash
 npm start
 ```
 
-Abra `http://127.0.0.1:5000`. Na página, informe o ID, IP e porta do novo
-nó. A porta `5000` fica reservada ao painel; utilize `5001`, `5002`, `5003` etc.
+No PowerShell, caso a execução de `npm.ps1` esteja bloqueada, utilize:
 
-Para o primeiro nó, por exemplo:
-
-- ID: `8`
-- IP: `127.0.0.1`
-- Porta de início: `5001`
-- Opção: **Criar um novo anel**
-
-Para o segundo nó, informe seu próprio ID/IP/porta (`20`, `127.0.0.1`, `5002`)
-e selecione **Entrar por um nó existente**. Como destino, informe o nó 8 em
-`127.0.0.1:5001`.
-
-O painel controlador lista todos os nós locais em execução. Use **Abrir painel**
-para ver o predecessor, sucessor, anel e finger table de um nó específico. Por
-exemplo, o painel do nó na porta `5001` estará em
-`http://127.0.0.1:5001`, e seu estado JSON em
-`http://127.0.0.1:5001/api/state`.
-
-Na mesma máquina, os nós compartilham o IP `127.0.0.1`, mas obrigatoriamente
-usam portas diferentes.
-
-### Executar em máquinas da rede local
-
-Em cada máquina, execute `npm start` e abra o painel usando o IP da própria
-máquina, por exemplo `http://172.16.1.10:5000`. O servidor escuta em todas as
-interfaces e o painel preenche automaticamente o campo **IP desta máquina**.
-
-Na primeira máquina, crie um novo anel. Nas demais, escolha **Entrar por um nó
-existente** e informe o ID, IP e porta do primeiro nó (por exemplo,
-`1`, `172.16.1.10`, `5001`). Cada nó deve anunciar o IP `172.16.X.X` da máquina
-em que está executando, nunca `127.0.0.1` ou `0.0.0.0`.
-
-Libere no firewall TCP a porta `5000` para o painel e as portas usadas pelos
-nós (`5001`, `5002` etc.). Confirme a comunicação de outra máquina com:
-
-```bash
-curl http://172.16.1.10:5001/api/state
+```powershell
+npm.cmd start
 ```
 
-## Join
+O gerenciador estará disponível em `http://127.0.0.1:5000`. Essa porta pertence exclusivamente ao gerenciador; os nós devem utilizar portas diferentes, como `5001`, `5002` e `5003`.
 
-Ao receber `POST /join`, o nó:
+## Exemplo de criação do anel
 
-1. cria sozinho um novo anel quando `bootstrap` não é informado; ou
-2. pede ao nó de entrada o sucessor de seu próprio ID;
-3. liga-se ao predecessor e ao sucessor encontrados;
-4. calcula as cinco entradas para `n + 1`, `n + 2`, `n + 4`, `n + 8` e `n + 16`.
-5. percorre o anel para atualizar as finger tables dos demais nós.
+Crie o primeiro nó com:
 
-Execute os testes com:
+```text
+ID: 8
+IP: 127.0.0.1
+Porta: 5001
+Modo: Criar um novo anel
+```
+
+Em seguida, crie o nó `20`:
+
+```text
+ID: 20
+IP: 127.0.0.1
+Porta: 5002
+Modo: Entrar por um nó existente
+
+Nó de entrada:
+ID: 8
+IP: 127.0.0.1
+Porta: 5001
+```
+
+Um terceiro nó pode ser criado com ID `28` e porta `5003`, entrando pelo mesmo nó `8`.
+
+No gerenciador, o botão **Abrir painel** acessa a interface individual de cada nó. Por exemplo, `http://127.0.0.1:5001`. O estado desse nó também pode ser consultado em `http://127.0.0.1:5001/api/state`.
+
+## Formação e roteamento do anel
+
+O primeiro nó aponta seu predecessor, sucessor e todas as fingers para ele próprio. Quando outro nó executa `join`, ele usa o nó de entrada para localizar o sucessor de seu ID, conecta-se aos vizinhos encontrados e solicita a atualização das finger tables.
+
+As cinco fingers de um nó `n` começam nas posições:
+
+```text
+n + 1, n + 2, n + 4, n + 8, n + 16
+```
+
+Cada entrada aponta para o primeiro nó ativo igual ou posterior à posição calculada. A finger table é uma tabela de roteamento e, por isso, não precisa listar todos os nós da rede.
+
+## Distribuição dos arquivos
+
+O nome do arquivo passa por SHA-256 e é convertido para uma posição entre `1` e `32`. O proprietário é o primeiro nó ativo encontrado a partir dessa posição.
+
+Considere o anel:
+
+```text
+8 → 20 → 28 → 8
+```
+
+Se o nome de um arquivo resultar na posição `17`, o nó `20` será o proprietário. O nó utilizado para fazer o upload funciona apenas como ponto de entrada e não precisa ser o responsável pelo armazenamento.
+
+## Estratégia de replicação
+
+Depois de armazenar o original, o proprietário envia réplicas para seus dois sucessores consecutivos. Com o proprietário no nó `20`, a distribuição do exemplo anterior seria:
+
+```text
+Nó 20: arquivo original
+Nó 28: primeira réplica
+Nó 8:  segunda réplica
+```
+
+| Nós ativos | Originais | Réplicas | Cópias totais |
+|---:|---:|---:|---:|
+| 1 | 1 | 0 | 1 |
+| 2 | 1 | 1 | 2 |
+| 3 ou mais | 1 | 2 | 3 |
+
+As réplicas não continuam propagando o arquivo. Somente o proprietário envia as duas cópias. Antes de atualizar uma réplica, o conteúdo é comparado por SHA-256 para evitar uma transferência desnecessária.
+
+Os originais e as réplicas ficam separados no disco:
+
+```text
+data/node-20-5002/arquivo.txt
+data/node-28-5003-replica/owner-20/arquivo.txt
+data/node-8-5001-replica/owner-20/arquivo.txt
+```
+
+## Catálogo distribuído
+
+O arquivo interno `catalogo.txt` mantém um nome por linha e permite que os painéis listem os arquivos disponíveis. Ele também passa pelo Chord, possui proprietário e recebe réplicas.
+
+Antes do primeiro upload, o catálogo ainda não existe e o painel apresenta uma lista vazia. Ele é criado automaticamente quando o primeiro arquivo é inserido.
+
+## Inserção e recuperação
+
+Pela interface, abra o painel de qualquer nó, escolha um arquivo e clique em **Fazer upload**. O resultado mostra o hash, o proprietário e os destinos das réplicas.
+
+Para recuperar, abra o painel de qualquer nó e clique no nome exibido no catálogo. O pedido será roteado até o proprietário. Se ele estiver indisponível, o sistema procura uma réplica e informa qual nó entregou o conteúdo.
+
+As mesmas operações podem ser realizadas por HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:5001/api/files \
+  -H "content-type: application/json" \
+  -d '{"name":"trabalho.txt","content":"conteúdo de exemplo"}'
+
+curl -OJ "http://127.0.0.1:5002/api/files?name=trabalho.txt"
+```
+
+Arquivos binários devem ser enviados em Base64 com `"encoding":"base64"`.
+
+## Execução em computadores diferentes
+
+Cada máquina deve iniciar seu próprio gerenciador e anunciar um endereço IPv4 acessível pela rede local. Não anuncie `127.0.0.1` para outros computadores, pois esse endereço sempre representa a própria máquina.
+
+Exemplo:
+
+```text
+Máquina A: 192.168.1.10:5001
+Máquina B: 192.168.1.20:5001
+```
+
+Na máquina A, crie o anel. Na máquina B, selecione **Entrar por um nó existente** e informe o IP, o ID e a porta do nó da máquina A.
+
+As portas do gerenciador e dos nós precisam estar liberadas no firewall. Teste a comunicação a partir de outro computador:
+
+```bash
+curl http://192.168.1.10:5001/api/state
+```
+
+## Testes automatizados
+
+Execute:
 
 ```bash
 npm test
 ```
 
-## Arquivos: `put` e `get`
+Ou, no PowerShell:
 
-Cada `ChordNode` oferece `put(nome, conteúdo)` e `get(nome)`. O SHA-256 do nome
-é convertido para uma posição entre 1 e 32; `findSuccessor` escolhe o primeiro
-nó ativo nessa posição ou depois dela. Assim, posições sem nó são naturalmente
-armazenadas no próximo nó ativo do anel.
-
-```js
-await node.put('trabalho.txt', Buffer.from('conteúdo'));
-const arquivo = await node.get('trabalho.txt');
-console.log(arquivo.content.toString());
+```powershell
+npm.cmd test
 ```
 
-Todo `put` também atualiza `catalogo.txt` (um nome por linha). O catálogo usa o
-mesmo hash e é armazenado na própria rede. Pela API HTTP de qualquer nó:
+A suíte verifica aritmética circular, intervalos do anel, criação de nós, hash, inserção, recuperação, catálogo vazio, segurança dos nomes, escolha dos sucessores de replicação, roteamento por HTTP, saída graciosa e recuperação após falha abrupta.
 
-```bash
-curl -X POST http://127.0.0.1:5001/api/files \
-  -H 'content-type: application/json' \
-  -d '{"name":"trabalho.txt","content":"conteúdo"}'
+## Sequência sugerida para demonstração
 
-curl -OJ 'http://127.0.0.1:5001/api/files?name=trabalho.txt'
-curl 'http://127.0.0.1:5001/api/files?name=catalogo.txt'
-```
+1. Execute os testes e mostre que todos foram aprovados.
+2. Inicie o gerenciador e crie os nós `8`, `20` e `28`.
+3. Abra o painel do nó `8` e mostre seu predecessor, sucessor e finger table.
+4. Envie um arquivo pelo nó `8`.
+5. Mostre que o proprietário foi escolhido pelo hash, independentemente do nó de entrada.
+6. Mostre os dois cartões de réplica e os respectivos endereços.
+7. Abra o painel de outro nó e recupere o mesmo arquivo pelo catálogo.
+8. Abra o arquivo baixado para confirmar que o conteúdo foi preservado.
+9. Opcionalmente, desligue um nó pelo gerenciador para mostrar a transferência dos arquivos e a reorganização do anel.
 
-Para bytes arbitrários, envie `content` em Base64 e acrescente
-`"encoding":"base64"` ao JSON do `POST`.
-
-## Roteiro para a demonstração ao vivo
-
-A estratégia implementada mantém o arquivo original no nó responsável pela
-posição do hash e até **duas réplicas nos sucessores consecutivos** do
-proprietário. Com três ou mais nós, cada upload mostra um proprietário e duas
-réplicas.
-
-1. Execute `npm start` (no PowerShell que bloqueia scripts, use
-   `npm.cmd start`) e abra `http://127.0.0.1:5000`.
-2. Crie os nós `8`, `20` e `28`, nas portas `5001`, `5002` e `5003`. O primeiro
-   cria o anel; os demais entram pelo nó 8 em `127.0.0.1:5001`.
-3. Abra o painel de qualquer nó, envie um arquivo e mostre os cartões
-   **Proprietário** e **Réplica**, com IDs e endereços dos nós.
-4. Clique no nome do arquivo no catálogo para recuperá-lo pela rede.
-5. Use o botão **Desligar** para demonstrar a saída graciosa: antes de encerrar,
-   o nó transfere os arquivos e atualiza seus vizinhos.
-
-Antes da apresentação, execute `npm test` (ou `npm.cmd test` no PowerShell). A
-suíte inclui inserção, roteamento, replicação, migração, saída graciosa e
-recuperação após queda abrupta do proprietário.
+Durante a demonstração, destaque que a busca pode entrar por qualquer participante, enquanto o armazenamento é decidido pelo hash e a disponibilidade é aumentada pelas duas réplicas nos sucessores.
