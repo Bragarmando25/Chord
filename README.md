@@ -187,17 +187,4 @@ npm.cmd test
 ```
 
 A suíte verifica aritmética circular, intervalos do anel, criação de nós, hash, inserção, recuperação, catálogo vazio, segurança dos nomes, escolha dos sucessores de replicação, roteamento por HTTP, saída graciosa e recuperação após falha abrupta.
-
-## Sequência sugerida para demonstração
-
-1. Execute os testes e mostre que todos foram aprovados.
-2. Inicie o gerenciador e crie os nós `8`, `20` e `28`.
-3. Abra o painel do nó `8` e mostre seu predecessor, sucessor e finger table.
-4. Envie um arquivo pelo nó `8`.
-5. Mostre que o proprietário foi escolhido pelo hash, independentemente do nó de entrada.
-6. Mostre os dois cartões de réplica e os respectivos endereços.
-7. Abra o painel de outro nó e recupere o mesmo arquivo pelo catálogo.
-8. Abra o arquivo baixado para confirmar que o conteúdo foi preservado.
-9. Opcionalmente, desligue um nó pelo gerenciador para mostrar a transferência dos arquivos e a reorganização do anel.
-
 Durante a demonstração, destaque que a busca pode entrar por qualquer participante, enquanto o armazenamento é decidido pelo hash e a disponibilidade é aumentada pelas duas réplicas nos sucessores.
