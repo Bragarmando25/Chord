@@ -6,12 +6,13 @@ const crypto = require('node:crypto');
 const { FINGER_COUNT, add, hashKey, inInterval, validateId } = require('./ring');
 
 const CATALOG_NAME = 'catalogo.txt';
+const REPLICATION_FACTOR = 2;
 
 class ChordNode {
-  constructor({ id, host = '127.0.0.1', port = 5000, requestTimeout = 10000,
-    storageDirectory } = {}) {
+  constructor({ id, host = '127.0.0.1', port = 5000, requestTimeout = 10000, storageDirectory } = {}) {
     this.id = validateId(id);
     this.host = String(host || '').trim();
+    this.replicaTargets = [];
 
     if (!this.host || this.host === '0.0.0.0' || this.host === '::') {
       throw new Error('Informe o IP ou hostname pelo qual os outros nós acessam esta máquina');
@@ -24,9 +25,7 @@ class ChordNode {
     }
 
     this.requestTimeout = requestTimeout;
-    this.storageDirectory = storageDirectory || path.join(
-      process.cwd(), 'data', `node-${this.id}-${this.port}`
-    );
+    this.storageDirectory = storageDirectory || path.join(process.cwd(), 'data', `node-${this.id}-${this.port}`);
 
     this.replicaDirectory = `${this.storageDirectory}-replica`;
     this.predecessor = null;
@@ -126,27 +125,83 @@ class ChordNode {
     return { ...this.state(), migration };
   }
 
-  async refreshFingerTable() {
-    const previousTargets = this.getReplicaTargets();
+  async leave() {
+    this.assertJoined();
 
-    const nodes = await Promise.all(
-      this.fingers.map((finger) => this.findSuccessor(finger.start))
-    );
+    const successor = this.successor;
+    const predecessor = this.predecessor;
+    const transferred = [];
+
+    if (successor && successor.id !== this.id) {
+      for (const fileName of await this.listLocalFiles()) {
+        const content = await this.readLocal(fileName);
+        const storage = await this.rpc(successor, '/rpc/files', {
+          method: 'PUT',
+          body: {
+            name: fileName,
+            content: content.toString('base64')
+          }
+        });
+
+        transferred.push({
+          name: fileName,
+          hashId: hashKey(fileName),
+          from: this.reference,
+          to: successor,
+          replicas: storage.replicas || []
+        });
+      }
+
+      await this.rpc(successor, '/rpc/predecessor', {
+        method: 'PUT',
+        body: { node: predecessor }
+      });
+
+      await this.rpc(predecessor, '/rpc/successor', {
+        method: 'PUT',
+        body: { node: successor }
+      });
+
+      await this.rpc(successor, '/rpc/refresh-fingers', {
+        method: 'POST',
+        body: { originId: successor.id, hops: 0 }
+      });
+    }
+
+    this.joined = false;
+    this.predecessor = null;
+    this.fingers = this.buildEmptyFingerTable();
+    this.replicaTargets = [];
+
+    return {
+      left: true,
+      node: this.reference,
+      transferred
+    };
+  }
+
+  async refreshFingerTable() {
+    const previousTargets = this.replicaTargets;
+
+    const nodes = await Promise.all(this.fingers.map((finger) => this.findSuccessor(finger.start)));
 
     this.fingers.forEach((finger, index) => {
       finger.node = nodes[index];
     });
 
-    const currentTargets = this.getReplicaTargets();
+    const currentTargets = await this.getReplicaTargets();
 
-    await this.ensureFingerReplicas();
+    await this.ensureSuccessorReplicas();
+
     await this.removeObsoleteFingerReplicas(previousTargets, currentTargets);
+
+    this.replicaTargets = currentTargets;
   }
 
   async refreshRingFingerTables(originId, hops = 0) {
     validateId(originId);
 
-    if (this.id === Number(originId)) {
+    if (hops > 0 && this.id === Number(originId)) {
       return { ok: true };
     }
 
@@ -158,18 +213,16 @@ class ChordNode {
 
     const next = this.successor;
 
-    setImmediate(() => {
-      this.rpc(next, '/rpc/refresh-fingers', {
-        method: 'POST',
-        body: {
-          originId: Number(originId),
-          hops: hops + 1
-        }
-      }).catch((error) => {
-        console.error(
-          `Não foi possível atualizar as fingers após o nó ${this.id}: ${error.message}`
-        );
-      });
+    if (next.id === Number(originId)) {
+      return { ok: true };
+    }
+
+    await this.rpc(next, '/rpc/refresh-fingers', {
+      method: 'POST',
+      body: {
+        originId: Number(originId),
+        hops: hops + 1
+      }
     });
 
     return { ok: true };
@@ -199,24 +252,38 @@ class ChordNode {
       next = this.successor;
     }
 
-    return this.rpc(next, '/rpc/find-successor', {
+    const request = {
       method: 'POST',
       body: {
         id,
         hops: hops + 1
       }
-    });
+    };
+
+    try {
+      return await this.rpc(next, '/rpc/find-successor', request);
+    } catch (error) {
+      if (next.id === this.successor.id) {
+        throw error;
+      }
+
+      // Uma finger pode ficar obsoleta por alguns instantes enquanto um nó
+      // sai. O sucessor imediato continua sendo a rota segura pelo anel.
+      for (const finger of this.fingers) {
+        if (finger.node?.id === next.id) {
+          finger.node = this.successor;
+        }
+      }
+
+      return this.rpc(this.successor, '/rpc/find-successor', request);
+    }
   }
 
   closestPrecedingFinger(id) {
     for (let i = this.fingers.length - 1; i >= 0; i -= 1) {
       const candidate = this.fingers[i].node;
 
-      if (
-        candidate &&
-        candidate.id !== this.id &&
-        inInterval(candidate.id, this.id, id, false, false)
-      ) {
+      if (candidate && candidate.id !== this.id && inInterval(candidate.id, this.id, id, false, false)) {
         return candidate;
       }
     }
@@ -248,6 +315,16 @@ class ChordNode {
 
     if (updateCatalog && name !== CATALOG_NAME) {
       await this.addToCatalog(name);
+
+      const replicas = (storageResult.replicas || []).map((replica) =>
+        replica.ok ? `nó ${replica.node.id} (${replica.node.host}:${replica.node.port})` : `nó ${replica.node.id} [falha: ${replica.error}]`
+      );
+
+      console.log(
+        `Arquivo "${name}" armazenado no proprietário nó ${owner.id} ` +
+          `(${owner.host}:${owner.port}), hash ${hashId}. ` +
+          (replicas.length > 0 ? `Réplicas: ${replicas.join(', ')}.` : 'Nenhuma réplica necessária.')
+      );
     }
 
     return {
@@ -283,10 +360,7 @@ class ChordNode {
       if (owner.id === this.id) {
         content = await this.readLocal(name);
       } else {
-        const result = await this.rpc(
-          owner,
-          `/rpc/files?name=${encodeURIComponent(name)}`
-        );
+        const result = await this.rpc(owner, `/rpc/files?name=${encodeURIComponent(name)}`);
 
         content = Buffer.from(result.content, 'base64');
       }
@@ -301,10 +375,7 @@ class ChordNode {
         content
       };
     } catch (ownerError) {
-      console.log(
-        `Proprietário ${owner.id} indisponível ou sem o arquivo. ` +
-        `Procurando réplica de "${name}"...`
-      );
+      console.log(`Proprietário ${owner.id} indisponível ou sem o arquivo. ` + `Procurando réplica de "${name}"...`);
 
       const replica = await this.findReplicaInNetwork(owner.id, name);
 
@@ -312,9 +383,7 @@ class ChordNode {
         throw ownerError;
       }
 
-      console.log(
-        `Arquivo "${name}" recuperado da réplica no nó ${replica.node.id}.`
-      );
+      console.log(`Arquivo "${name}" recuperado da réplica no nó ${replica.node.id}.`);
 
       return {
         name,
@@ -334,10 +403,7 @@ class ChordNode {
     try {
       const catalog = await this.get(CATALOG_NAME);
 
-      names = catalog.content
-        .toString('utf8')
-        .split(/\r?\n/)
-        .filter(Boolean);
+      names = catalog.content.toString('utf8').split(/\r?\n/).filter(Boolean);
     } catch (error) {
       if (error.code !== 'ENOENT' && !/não encontrado/i.test(error.message)) {
         throw error;
@@ -350,11 +416,7 @@ class ChordNode {
 
     names.sort((a, b) => a.localeCompare(b, 'pt-BR'));
 
-    await this.put(
-      CATALOG_NAME,
-      Buffer.from(`${names.join('\n')}\n`),
-      { updateCatalog: false }
-    );
+    await this.put(CATALOG_NAME, Buffer.from(`${names.join('\n')}\n`), { updateCatalog: false });
   }
 
   async storeLocal(fileName, content) {
@@ -386,7 +448,7 @@ class ChordNode {
 
     await this.storeLocal(name, bytes);
 
-    const replicas = await this.replicateFileToFingerNodes(name, bytes);
+    const replicas = await this.replicateFileToSuccessors(name, bytes);
 
     return {
       ok: true,
@@ -396,31 +458,35 @@ class ChordNode {
     };
   }
 
-  getReplicaTargets() {
-    const nodes = new Map();
+  async getReplicaTargets() {
+    const targets = [];
+    const visited = new Set([this.id]);
+    let current = this.successor;
 
-    for (const finger of this.fingers) {
-      const node = finger.node;
+    while (current && targets.length < REPLICATION_FACTOR && !visited.has(current.id)) {
+      visited.add(current.id);
+      targets.push(current);
 
-      if (!node || node.id === this.id) {
-        continue;
+      try {
+        const state = await this.rpc(current, '/rpc/state');
+
+        current = state.successor;
+      } catch (error) {
+        console.error(`Não foi possível descobrir o sucessor do nó ` + `${current.id}: ${error.message}`);
+
+        break;
       }
-
-      nodes.set(node.id, node);
     }
 
-    return [...nodes.values()];
+    return targets;
   }
 
-  async replicateFileToFingerNodes(fileName, content) {
-    const targets = this.getReplicaTargets();
+  async replicateFileToSuccessors(fileName, content) {
+    const targets = await this.getReplicaTargets();
 
-    const results = await Promise.allSettled(
-      targets.map((target) =>
-        this.ensureReplicaOnNode(target, fileName, content)
-      )
-    );
-
+    const results = await Promise.allSettled(targets.map((target) => 
+    this.ensureReplicaOnNode(target, fileName, content)));
+    
     return results.map((result, index) => {
       const target = targets[index];
 
@@ -431,10 +497,7 @@ class ChordNode {
         };
       }
 
-      console.error(
-        `Não foi possível replicar "${fileName}" no nó ${target.id}: ` +
-        result.reason.message
-      );
+      console.error(`Não foi possível replicar "${fileName}" no nó ${target.id}: ` + result.reason.message);
 
       return {
         ok: false,
@@ -447,11 +510,7 @@ class ChordNode {
   async ensureReplicaOnNode(target, fileName, content) {
     const expectedHash = sha256(content);
 
-    const status = await this.rpc(
-      target,
-      `/rpc/replicas/status?ownerId=${this.id}` +
-      `&name=${encodeURIComponent(fileName)}`
-    );
+    const status = await this.rpc(target, `/rpc/replicas/status?ownerId=${this.id}` + `&name=${encodeURIComponent(fileName)}`);
 
     if (status.exists && status.sha256 === expectedHash) {
       return {
@@ -475,27 +534,20 @@ class ChordNode {
     };
   }
 
-  async ensureFingerReplicas() {
+  async ensureSuccessorReplicas() {
     const files = await this.listLocalFiles();
 
     for (const fileName of files) {
       const content = await this.readLocal(fileName);
 
-      await this.replicateFileToFingerNodes(
-        fileName,
-        content
-      );
+      await this.replicateFileToSuccessors(fileName, content);
     }
   }
 
   async removeObsoleteFingerReplicas(previousTargets, currentTargets) {
-    const currentIds = new Set(
-      currentTargets.map((node) => node.id)
-    );
+    const currentIds = new Set(currentTargets.map((node) => node.id));
 
-    const obsoleteTargets = previousTargets.filter(
-      (node) => !currentIds.has(node.id)
-    );
+    const obsoleteTargets = previousTargets.filter((node) => !currentIds.has(node.id));
 
     if (obsoleteTargets.length === 0) {
       return;
@@ -506,20 +558,11 @@ class ChordNode {
     for (const target of obsoleteTargets) {
       for (const fileName of files) {
         try {
-          await this.removeReplicaOnNode(
-            target,
-            this.id,
-            fileName
-          );
+          await this.removeReplicaOnNode(target, this.id, fileName);
 
-          console.log(
-            `Réplica obsoleta "${fileName}" removida do nó ${target.id}.`
-          );
+          console.log(`Réplica obsoleta "${fileName}" removida do nó ${target.id}.`);
         } catch (error) {
-          console.error(
-            `Não foi possível remover a réplica "${fileName}" do nó ` +
-            `${target.id}: ${error.message}`
-          );
+          console.error(`Não foi possível remover a réplica "${fileName}" do nó ` + `${target.id}: ${error.message}`);
         }
       }
     }
@@ -529,23 +572,14 @@ class ChordNode {
     const owner = validateId(ownerId);
     const name = validateFileName(fileName);
 
-    return this.rpc(
-      target,
-      `/rpc/replicas?ownerId=${owner}&name=${encodeURIComponent(name)}`,
-      { method: 'DELETE' }
-    );
+    return this.rpc(target, `/rpc/replicas?ownerId=${owner}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
   }
 
   async listLocalFiles() {
     try {
-      const entries = await fs.readdir(
-        this.storageDirectory,
-        { withFileTypes: true }
-      );
+      const entries = await fs.readdir(this.storageDirectory, { withFileTypes: true });
 
-      return entries
-        .filter((entry) => entry.isFile())
-        .map((entry) => entry.name);
+      return entries.filter((entry) => entry.isFile()).map((entry) => entry.name);
     } catch (error) {
       if (error.code === 'ENOENT') {
         return [];
@@ -600,10 +634,7 @@ class ChordNode {
     for (const file of result.files || []) {
       const content = Buffer.from(file.content, 'base64');
 
-      const storage = await this.storeOwnedFile(
-        file.name,
-        content
-      );
+      const storage = await this.storeOwnedFile(file.name, content);
 
       await this.rpc(source, '/rpc/owned-files', {
         method: 'DELETE',
@@ -620,9 +651,7 @@ class ChordNode {
         replicas: storage.replicas
       });
 
-      console.log(
-        `Arquivo "${file.name}" migrado do nó ${source.id} para o nó ${this.id}.`
-      );
+      console.log(`Arquivo "${file.name}" migrado do nó ${source.id} para o nó ${this.id}.`);
     }
 
     return migrated;
@@ -630,17 +659,12 @@ class ChordNode {
 
   async deleteOwnedFile(fileName) {
     const name = validateFileName(fileName);
-    const targets = this.getReplicaTargets();
+    const targets = await this.getReplicaTargets();
 
     let removed = false;
 
     try {
-      await fs.unlink(
-        path.join(
-          this.storageDirectory,
-          name
-        )
-      );
+      await fs.unlink(path.join(this.storageDirectory, name));
 
       removed = true;
     } catch (error) {
@@ -649,22 +673,11 @@ class ChordNode {
       }
     }
 
-    const results = await Promise.allSettled(
-      targets.map((target) =>
-        this.removeReplicaOnNode(
-          target,
-          this.id,
-          name
-        )
-      )
-    );
+    const results = await Promise.allSettled(targets.map((target) => this.removeReplicaOnNode(target, this.id, name)));
 
     results.forEach((result, index) => {
       if (result.status === 'rejected') {
-        console.error(
-          `Não foi possível remover a réplica antiga "${name}" do nó ` +
-          `${targets[index].id}: ${result.reason.message}`
-        );
+        console.error(`Não foi possível remover a réplica antiga "${name}" do nó ` + `${targets[index].id}: ${result.reason.message}`);
       }
     });
 
@@ -679,11 +692,7 @@ class ChordNode {
     const owner = validateId(ownerId);
     const name = validateFileName(fileName);
 
-    return path.join(
-      this.replicaDirectory,
-      `owner-${owner}`,
-      name
-    );
+    return path.join(this.replicaDirectory, `owner-${owner}`, name);
   }
 
   async storeReplica(ownerId, fileName, content) {
@@ -741,9 +750,7 @@ class ChordNode {
       return await fs.readFile(filePath);
     } catch (error) {
       if (error.code === 'ENOENT') {
-        const notFound = new Error(
-          `Réplica "${name}" do nó ${owner} não encontrada`
-        );
+        const notFound = new Error(`Réplica "${name}" do nó ${owner} não encontrada`);
 
         notFound.code = 'ENOENT';
 
@@ -771,11 +778,8 @@ class ChordNode {
     }
 
     try {
-      await fs.rmdir(
-        path.dirname(filePath)
-      );
-    } catch {
-    }
+      await fs.rmdir(path.dirname(filePath));
+    } catch {}
 
     return {
       ok: true,
@@ -820,20 +824,14 @@ class ChordNode {
     while (queue.length > 0 && queried.size < 32) {
       const current = queue.shift();
 
-      if (
-        current.id === this.id ||
-        queried.has(current.id)
-      ) {
+      if (current.id === this.id || queried.has(current.id)) {
         continue;
       }
 
       queried.add(current.id);
 
       try {
-        const state = await this.rpc(
-          current,
-          '/rpc/state'
-        );
+        const state = await this.rpc(current, '/rpc/state');
 
         addNode(state.node);
         addNode(state.predecessor);
@@ -842,8 +840,7 @@ class ChordNode {
         for (const finger of state.fingerTable || []) {
           addNode(finger.node);
         }
-      } catch {
-      }
+      } catch {}
     }
 
     return [...known.values()];
@@ -857,14 +854,9 @@ class ChordNode {
       return null;
     }
 
-    const ordered = nodes
-      .slice()
-      .sort((left, right) => left.id - right.id);
+    const ordered = nodes.slice().sort((left, right) => left.id - right.id);
 
-    return (
-      ordered.find((node) => node.id >= id) ||
-      ordered[0]
-    );
+    return ordered.find((node) => node.id >= id) || ordered[0];
   }
 
   async findReplicaInNetwork(ownerId, fileName) {
@@ -886,10 +878,7 @@ class ChordNode {
 
       try {
         if (node.id === this.id) {
-          const content = await this.readReplica(
-            owner,
-            name
-          );
+          const content = await this.readReplica(owner, name);
 
           return {
             node: this.reference,
@@ -897,21 +886,13 @@ class ChordNode {
           };
         }
 
-        const result = await this.rpc(
-          node,
-          `/rpc/replicas/content?ownerId=${owner}` +
-          `&name=${encodeURIComponent(name)}`
-        );
+        const result = await this.rpc(node, `/rpc/replicas/content?ownerId=${owner}` + `&name=${encodeURIComponent(name)}`);
 
         return {
           node,
-          content: Buffer.from(
-            result.content,
-            'base64'
-          )
+          content: Buffer.from(result.content, 'base64')
         };
-      } catch {
-      }
+      } catch {}
     }
 
     return null;
@@ -919,9 +900,7 @@ class ChordNode {
 
   assertJoined() {
     if (!this.joined) {
-      throw new Error(
-        'O nó ainda não entrou em uma rede'
-      );
+      throw new Error('O nó ainda não entrou em uma rede');
     }
   }
 
@@ -929,36 +908,22 @@ class ChordNode {
     const target = normalizeReference(node);
     const controller = new AbortController();
 
-    const timer = setTimeout(
-      () => controller.abort(),
-      this.requestTimeout
-    );
+    const timer = setTimeout(() => controller.abort(), this.requestTimeout);
 
     try {
-      const response = await fetch(
-        `http://${target.host}:${target.port}${route}`,
-        {
-          method,
-          headers: body
-            ? { 'content-type': 'application/json' }
-            : undefined,
-          body: body
-            ? JSON.stringify(body)
-            : undefined,
-          signal: controller.signal
-        }
-      );
+      const response = await fetch(`http://${target.host}:${target.port}${route}`, {
+        method,
+        headers: body ? { 'content-type': 'application/json' } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
 
       const data = await response.json();
 
       if (!response.ok) {
-        const rpcError = new Error(
-          data.error ||
-          `Erro HTTP ${response.status}`
-        );
+        const rpcError = new Error(data.error || `Erro HTTP ${response.status}`);
 
-        rpcError.status =
-          response.status;
+        rpcError.status = response.status;
 
         if (response.status === 404) {
           rpcError.code = 'ENOENT';
@@ -970,13 +935,9 @@ class ChordNode {
       return data;
     } catch (error) {
       if (error.name === 'AbortError') {
-        const timeout = new Error(
-          `Tempo limite ao acessar o nó ${target.id} ` +
-          `em ${target.host}:${target.port}`
-        );
+        const timeout = new Error(`Tempo limite ao acessar o nó ${target.id} ` + `em ${target.host}:${target.port}`);
 
-        timeout.code =
-          'ETIMEDOUT';
+        timeout.code = 'ETIMEDOUT';
 
         throw timeout;
       }
@@ -999,35 +960,18 @@ class ChordNode {
 }
 
 function sha256(content) {
-  return crypto
-    .createHash('sha256')
-    .update(content)
-    .digest('hex');
+  return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 function validateFileName(fileName) {
-  if (
-    typeof fileName !== 'string' ||
-    !fileName.trim()
-  ) {
-    throw new Error(
-      'O nome do arquivo é obrigatório'
-    );
+  if (typeof fileName !== 'string' || !fileName.trim()) {
+    throw new Error('O nome do arquivo é obrigatório');
   }
 
   const name = fileName.trim();
 
-  if (
-    name === '.' ||
-    name === '..' ||
-    path.basename(name) !== name ||
-    name.includes('/') ||
-    name.includes('\\') ||
-    name.includes('\0')
-  ) {
-    throw new Error(
-      'Nome de arquivo inválido'
-    );
+  if (name === '.' || name === '..' || path.basename(name) !== name || name.includes('/') || name.includes('\\') || name.includes('\0')) {
+    throw new Error('Nome de arquivo inválido');
   }
 
   return name;
@@ -1035,23 +979,13 @@ function validateFileName(fileName) {
 
 function normalizeReference(node) {
   if (!node || typeof node !== 'object') {
-    throw new Error(
-      'Referência de nó inválida'
-    );
+    throw new Error('Referência de nó inválida');
   }
 
-  const port = Number(
-    node.port || 5000
-  );
+  const port = Number(node.port || 5000);
 
-  if (
-    !Number.isInteger(port) ||
-    port < 1 ||
-    port > 65535
-  ) {
-    throw new Error(
-      'Porta de referência de nó inválida'
-    );
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('Porta de referência de nó inválida');
   }
 
   return {

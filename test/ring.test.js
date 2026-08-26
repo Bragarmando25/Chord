@@ -28,14 +28,16 @@ test('primeiro nó cria anel e preenche cinco fingers', async () => {
   assert.equal(node.fingers.length, 5);
   assert.equal(node.predecessor.id, 8);
   assert.ok(node.fingers.every((finger) => finger.node.id === 8));
-  assert.deepEqual(node.fingers.map((finger) => finger.start), [9, 10, 12, 16, 24]);
+  assert.deepEqual(
+    node.fingers.map((finger) => finger.start),
+    [9, 10, 12, 16, 24]
+  );
 });
 
 test('cada nó aceita uma porta própria e rejeita portas inválidas', () => {
   assert.equal(new ChordNode({ id: 2, port: 5001 }).port, 5001);
   assert.throws(() => new ChordNode({ id: 2, port: 70000 }), /porta/);
-  assert.throws(() => new ChordNode({ id: 2, host: '0.0.0.0', port: 5001 }),
-    /IP ou hostname/);
+  assert.throws(() => new ChordNode({ id: 2, host: '0.0.0.0', port: 5001 }), /IP ou hostname/);
 });
 
 test('hash de arquivo é determinístico e sempre aponta para uma das 32 posições', () => {
@@ -61,14 +63,46 @@ test('nomes de arquivo não podem escapar do diretório do nó', async () => {
   await assert.rejects(node.put('../segredo.txt', 'x'), /inválido/);
 });
 
+test('replicação seleciona sucessores consecutivos e não a finger table inteira', async () => {
+  const node = new ChordNode({
+    id: 1,
+    port: 5001,
+    replicationFactor: 3
+  });
+
+  node.createRing();
+  node.successor = { id: 5, host: '127.0.0.1', port: 5005 };
+
+  const successors = new Map([
+    [5, { id: 10, host: '127.0.0.1', port: 5010 }],
+    [10, node.reference]
+  ]);
+
+  node.rpc = async (target, route) => {
+    assert.equal(route, '/rpc/state');
+    return { successor: successors.get(target.id) };
+  };
+
+  const targets = await node.getReplicaTargets();
+
+  assert.deepEqual(
+    targets.map((target) => target.id),
+    [5, 10]
+  );
+});
+
 test('posição sem nó armazena no próximo nó ativo através de HTTP', async (t) => {
   const [portA, portB] = await Promise.all([freePort(), freePort()]);
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'chord-network-test-'));
   const first = await startNodeServer({
-    id: 8, port: portA, storageDirectory: path.join(directory, '8')
+    id: 8,
+    port: portA,
+    storageDirectory: path.join(directory, '8')
   });
   const second = await startNodeServer({
-    id: 20, port: portB, storageDirectory: path.join(directory, '20')
+    id: 20,
+    port: portB,
+    storageDirectory: path.join(directory, '20')
   });
   t.after(async () => {
     await Promise.all([first.close(), second.close()]);
@@ -95,6 +129,100 @@ test('posição sem nó armazena no próximo nó ativo através de HTTP', async 
   assert.deepEqual((await first.node.get(name)).content, bytes);
   assert.deepEqual(await second.node.readLocal(name), bytes);
   assert.match((await second.node.get('catalogo.txt')).content.toString(), new RegExp(name));
+
+  const leaveResult = await second.node.leave();
+
+  assert.equal(leaveResult.left, true);
+  assert.equal(first.node.successor.id, first.node.id);
+  assert.equal(first.node.predecessor.id, first.node.id);
+  assert.deepEqual(await first.node.readLocal(name), bytes);
+});
+
+test('saídas consecutivas atualizam o anel antes de desligar o próximo nó', async (t) => {
+  const ports = await Promise.all([freePort(), freePort(), freePort()]);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'chord-leave-test-'));
+  const running = [];
+
+  t.after(async () => {
+    await Promise.allSettled(running.map((entry) => entry.close()));
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  for (const [index, id] of [1, 4, 17].entries()) {
+    const entry = await startNodeServer({
+      id,
+      port: ports[index],
+      storageDirectory: path.join(directory, String(id))
+    });
+
+    running.push(entry);
+    await entry.node.join(index === 0 ? null : running[0].node.reference);
+  }
+
+  await running[0].node.put('saida-sequencial.txt', 'conteúdo preservado');
+  await running[0].node.leave();
+  await running[0].close();
+
+  await running[1].node.leave();
+  await running[1].close();
+
+  assert.equal(running[2].node.successor.id, 17);
+  assert.equal(running[2].node.predecessor.id, 17);
+  assert.equal((await running[2].node.get('saida-sequencial.txt')).content.toString(), 'conteúdo preservado');
+});
+
+test('arquivo é recuperado de uma réplica após queda abrupta do proprietário', async (t) => {
+  const ports = await Promise.all([freePort(), freePort(), freePort()]);
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'chord-failure-test-'));
+  const running = [];
+
+  t.after(async () => {
+    await Promise.allSettled(running.map((entry) => entry.close()));
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+
+  for (const [index, id] of [8, 20, 28].entries()) {
+    const entry = await startNodeServer({
+      id,
+      port: ports[index],
+      requestTimeout: 500,
+      storageDirectory: path.join(directory, String(id))
+    });
+
+    running.push(entry);
+    await entry.node.join(index === 0 ? null : running[0].node.reference);
+  }
+
+  let name;
+  for (let index = 0; index < 1000; index += 1) {
+    const candidate = `falha-${index}.txt`;
+    const position = hashKey(candidate);
+
+    if (position <= 8 || position > 28) {
+      name = candidate;
+      break;
+    }
+  }
+
+  assert.ok(name);
+
+  const content = Buffer.from('conteúdo preservado pela replicação');
+  const stored = await running[1].node.put(name, content);
+
+  assert.equal(stored.node.id, 8);
+  assert.deepEqual(
+    stored.replicas.filter((replica) => replica.ok).map((replica) => replica.node.id),
+    [20, 28]
+  );
+
+  await running[0].close();
+
+  const recovered = await running[1].node.get(name);
+
+  assert.equal(recovered.fromReplica, true);
+  assert.equal(recovered.node.id, 8);
+  assert.equal(recovered.servedBy.id, 20);
+  assert.deepEqual(recovered.content, content);
 });
 
 async function freePort() {
@@ -104,7 +232,6 @@ async function freePort() {
     server.listen(0, '127.0.0.1', resolve);
   });
   const { port } = server.address();
-  await new Promise((resolve, reject) =>
-    server.close((error) => error ? reject(error) : resolve()));
+  await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
   return port;
 }

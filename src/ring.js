@@ -48,13 +48,10 @@ function inInterval(id, start, end, includeStart = false, includeEnd = false) {
   }
 
   if (left < right) {
-    return (point > left || (includeStart && point === left))
-      && (point < right || (includeEnd && point === right));
+    return (point > left || (includeStart && point === left)) && (point < right || (includeEnd && point === right));
   }
 
-  return point > left || point < right
-    || (includeStart && point === left)
-    || (includeEnd && point === right);
+  return point > left || point < right || (includeStart && point === left) || (includeEnd && point === right);
 }
 
 module.exports = {

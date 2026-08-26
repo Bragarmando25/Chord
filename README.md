@@ -96,3 +96,24 @@ curl 'http://127.0.0.1:5001/api/files?name=catalogo.txt'
 
 Para bytes arbitrários, envie `content` em Base64 e acrescente
 `"encoding":"base64"` ao JSON do `POST`.
+
+## Roteiro para a demonstração ao vivo
+
+A estratégia implementada mantém o arquivo original no nó responsável pela
+posição do hash e até **duas réplicas nos sucessores consecutivos** do
+proprietário. Com três ou mais nós, cada upload mostra um proprietário e duas
+réplicas.
+
+1. Execute `npm start` (no PowerShell que bloqueia scripts, use
+   `npm.cmd start`) e abra `http://127.0.0.1:5000`.
+2. Crie os nós `8`, `20` e `28`, nas portas `5001`, `5002` e `5003`. O primeiro
+   cria o anel; os demais entram pelo nó 8 em `127.0.0.1:5001`.
+3. Abra o painel de qualquer nó, envie um arquivo e mostre os cartões
+   **Proprietário** e **Réplica**, com IDs e endereços dos nós.
+4. Clique no nome do arquivo no catálogo para recuperá-lo pela rede.
+5. Use o botão **Desligar** para demonstrar a saída graciosa: antes de encerrar,
+   o nó transfere os arquivos e atualiza seus vizinhos.
+
+Antes da apresentação, execute `npm test` (ou `npm.cmd test` no PowerShell). A
+suíte inclui inserção, roteamento, replicação, migração, saída graciosa e
+recuperação após queda abrupta do proprietário.

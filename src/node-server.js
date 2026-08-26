@@ -17,10 +17,7 @@ const STATIC_FILES = {
 async function startNodeServer(options) {
   const node = new ChordNode(options);
 
-  const server = http.createServer(
-    (request, response) =>
-      handleNodeRequest(node, request, response)
-  );
+  const server = http.createServer((request, response) => handleNodeRequest(node, request, response));
 
   await new Promise((resolve, reject) => {
     server.once('error', reject);
@@ -30,445 +27,196 @@ async function startNodeServer(options) {
   return {
     node,
     server,
-    close: () => new Promise((resolve, reject) =>
-      server.close((error) =>
-        error ? reject(error) : resolve()
-      )
-    )
+    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())))
   };
 }
 
 async function handleNodeRequest(node, request, response) {
   try {
-    const url = new URL(
-      request.url,
-      `http://${request.headers.host}`
-    );
+    const url = new URL(request.url, `http://${request.headers.host}`);
 
-    if (
-      request.method === 'GET' &&
-      STATIC_FILES[url.pathname]
-    ) {
-      const [file, contentType] =
-        STATIC_FILES[url.pathname];
+    if (request.method === 'GET' && STATIC_FILES[url.pathname]) {
+      const [file, contentType] = STATIC_FILES[url.pathname];
 
-      return sendFile(
-        response,
-        path.join(PUBLIC_DIRECTORY, file),
-        contentType
-      );
+      return sendFile(response, path.join(PUBLIC_DIRECTORY, file), contentType);
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/api/state'
-    ) {
+    if (request.method === 'GET' && url.pathname === '/api/state') {
       return json(response, 200, node.state());
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/api/files'
-    ) {
+    if (request.method === 'POST' && url.pathname === '/api/files') {
       const body = await readJson(request);
 
       if (body.name === 'catalogo.txt') {
-        throw new Error(
-          'catalogo.txt é reservado para o controle da rede'
-        );
+        throw new Error('catalogo.txt é reservado para o controle da rede');
       }
 
-      const content = Buffer.from(
-        body.content || '',
-        body.encoding === 'base64'
-          ? 'base64'
-          : 'utf8'
-      );
+      const content = Buffer.from(body.content || '', body.encoding === 'base64' ? 'base64' : 'utf8');
 
-      return json(
-        response,
-        201,
-        await node.put(body.name, content)
-      );
+      return json(response, 201, await node.put(body.name, content));
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/api/files'
-    ) {
-      const result =
-        await node.get(
-          url.searchParams.get('name')
-        );
+    if (request.method === 'GET' && url.pathname === '/api/files') {
+      const result = await node.get(url.searchParams.get('name'));
 
       response.writeHead(200, {
-        'content-type':
-          'application/octet-stream',
+        'content-type': 'application/octet-stream',
 
-        'content-disposition':
-          `attachment; filename="${encodeURIComponent(result.name)}"`,
+        'content-disposition': `attachment; filename="${encodeURIComponent(result.name)}"`,
 
-        'x-chord-hash-id':
-          String(result.hashId),
+        'x-chord-hash-id': String(result.hashId),
 
-        'x-chord-owner-node-id':
-          String(result.node.id),
+        'x-chord-owner-node-id': String(result.node.id),
 
-        'x-chord-served-by-node-id':
-          String(result.servedBy.id),
+        'x-chord-served-by-node-id': String(result.servedBy.id),
 
-        'x-chord-from-replica':
-          result.fromReplica
-            ? 'true'
-            : 'false'
+        'x-chord-from-replica': result.fromReplica ? 'true' : 'false'
       });
 
-      return response.end(
-        result.content
-      );
+      return response.end(result.content);
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/join'
-    ) {
-      const { bootstrap = null } =
-        await readJson(request);
+    if (request.method === 'POST' && url.pathname === '/join') {
+      const { bootstrap = null } = await readJson(request);
 
-      return json(
-        response,
-        200,
-        await node.join(bootstrap)
-      );
+      return json(response, 200, await node.join(bootstrap));
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/rpc/state'
-    ) {
-      return json(
-        response,
-        200,
-        node.state()
-      );
+    if (request.method === 'GET' && url.pathname === '/rpc/state') {
+      return json(response, 200, node.state());
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/rpc/find-successor'
-    ) {
+    if (request.method === 'POST' && url.pathname === '/rpc/find-successor') {
       const body = await readJson(request);
 
-      return json(
-        response,
-        200,
-        await node.findSuccessor(
-          body.id,
-          body.hops || 0
-        )
-      );
+      return json(response, 200, await node.findSuccessor(body.id, body.hops || 0));
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/rpc/predecessor'
-    ) {
-      return json(
-        response,
-        200,
-        {
-          node:
-            node.predecessor
-        }
-      );
+    if (request.method === 'GET' && url.pathname === '/rpc/predecessor') {
+      return json(response, 200, {
+        node: node.predecessor
+      });
     }
 
-    if (
-      request.method === 'PUT' &&
-      url.pathname === '/rpc/predecessor'
-    ) {
-      node.predecessor = normalizeReference(
-        (await readJson(request)).node
-      );
+    if (request.method === 'PUT' && url.pathname === '/rpc/predecessor') {
+      node.predecessor = normalizeReference((await readJson(request)).node);
 
-      return json(
-        response,
-        200,
-        { ok: true }
-      );
+      return json(response, 200, { ok: true });
     }
 
-    if (
-      request.method === 'PUT' &&
-      url.pathname === '/rpc/successor'
-    ) {
-      node.successor = normalizeReference(
-        (await readJson(request)).node
-      );
+    if (request.method === 'PUT' && url.pathname === '/rpc/successor') {
+      node.successor = normalizeReference((await readJson(request)).node);
 
-      return json(
-        response,
-        200,
-        { ok: true }
-      );
+      return json(response, 200, { ok: true });
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/rpc/refresh-fingers'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'POST' && url.pathname === '/rpc/refresh-fingers') {
+      const body = await readJson(request);
 
-      return json(
-        response,
-        200,
-        await node.refreshRingFingerTables(
-          body.originId,
-          body.hops || 0
-        )
-      );
+      return json(response, 200, await node.refreshRingFingerTables(body.originId, body.hops || 0));
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/rpc/owned-files/range'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'POST' && url.pathname === '/rpc/owned-files/range') {
+      const body = await readJson(request);
 
-      const files =
-        await node.ownedFilesInRange(
-          body.startExclusive,
-          body.endInclusive
-        );
+      const files = await node.ownedFilesInRange(body.startExclusive, body.endInclusive);
 
-      return json(
-        response,
-        200,
-        { files }
-      );
+      return json(response, 200, { files });
     }
 
-    if (
-      request.method === 'DELETE' &&
-      url.pathname === '/rpc/owned-files'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'DELETE' && url.pathname === '/rpc/owned-files') {
+      const body = await readJson(request);
 
-      return json(
-        response,
-        200,
-        await node.deleteOwnedFile(
-          body.name
-        )
-      );
+      return json(response, 200, await node.deleteOwnedFile(body.name));
     }
 
-    if (
-      request.method === 'PUT' &&
-      url.pathname === '/rpc/files'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'PUT' && url.pathname === '/rpc/files') {
+      const body = await readJson(request);
 
-      const content =
-        Buffer.from(
-          body.content || '',
-          'base64'
-        );
+      const content = Buffer.from(body.content || '', 'base64');
 
-      const result =
-        await node.storeOwnedFile(
-          body.name,
-          content
-        );
+      const result = await node.storeOwnedFile(body.name, content);
 
-      return json(
-        response,
-        200,
-        result
-      );
+      return json(response, 200, result);
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/rpc/files'
-    ) {
-      const name =
-        url.searchParams.get('name');
+    if (request.method === 'GET' && url.pathname === '/rpc/files') {
+      const name = url.searchParams.get('name');
 
-      const content =
-        await node.readLocal(name);
+      const content = await node.readLocal(name);
 
-      return json(
-        response,
-        200,
-        {
-          name,
-          content:
-            content.toString('base64')
-        }
-      );
+      return json(response, 200, {
+        name,
+        content: content.toString('base64')
+      });
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/rpc/replicas/status'
-    ) {
-      const ownerId =
-        url.searchParams.get('ownerId');
+    if (request.method === 'GET' && url.pathname === '/rpc/replicas/status') {
+      const ownerId = url.searchParams.get('ownerId');
 
-      const name =
-        url.searchParams.get('name');
+      const name = url.searchParams.get('name');
 
-      return json(
-        response,
-        200,
-        await node.replicaStatus(
-          ownerId,
-          name
-        )
-      );
+      return json(response, 200, await node.replicaStatus(ownerId, name));
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/rpc/replicas/content'
-    ) {
-      const ownerId =
-        url.searchParams.get('ownerId');
+    if (request.method === 'GET' && url.pathname === '/rpc/replicas/content') {
+      const ownerId = url.searchParams.get('ownerId');
 
-      const name =
-        url.searchParams.get('name');
+      const name = url.searchParams.get('name');
 
-      const content =
-        await node.readReplica(
-          ownerId,
-          name
-        );
+      const content = await node.readReplica(ownerId, name);
 
-      return json(
-        response,
-        200,
-        {
-          ownerId:
-            Number(ownerId),
-          name,
-          content:
-            content.toString('base64')
-        }
-      );
+      return json(response, 200, {
+        ownerId: Number(ownerId),
+        name,
+        content: content.toString('base64')
+      });
     }
 
-    if (
-      request.method === 'PUT' &&
-      url.pathname === '/rpc/replicas'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'PUT' && url.pathname === '/rpc/replicas') {
+      const body = await readJson(request);
 
-      const content =
-        Buffer.from(
-          body.content || '',
-          'base64'
-        );
+      const content = Buffer.from(body.content || '', 'base64');
 
-      return json(
-        response,
-        200,
-        await node.storeReplica(
-          body.ownerId,
-          body.name,
-          content
-        )
-      );
+      return json(response, 200, await node.storeReplica(body.ownerId, body.name, content));
     }
 
-    if (
-      request.method === 'DELETE' &&
-      url.pathname === '/rpc/replicas'
-    ) {
-      const ownerId =
-        url.searchParams.get('ownerId');
+    if (request.method === 'DELETE' && url.pathname === '/rpc/replicas') {
+      const ownerId = url.searchParams.get('ownerId');
 
-      const name =
-        url.searchParams.get('name');
+      const name = url.searchParams.get('name');
 
-      return json(
-        response,
-        200,
-        await node.deleteReplica(
-          ownerId,
-          name
-        )
-      );
+      return json(response, 200, await node.deleteReplica(ownerId, name));
     }
 
-    return json(
-      response,
-      404,
-      {
-        error:
-          'Rota não encontrada'
-      }
-    );
+    return json(response, 404, {
+      error: 'Rota não encontrada'
+    });
   } catch (error) {
-    const status =
-      error.name === 'AbortError' ||
-      error.code === 'ETIMEDOUT'
-        ? 504
-        : error.code === 'ENOENT'
-          ? 404
-          : 400;
+    const status = error.name === 'AbortError' || error.code === 'ETIMEDOUT' ? 504 : error.code === 'ENOENT' ? 404 : 400;
 
-    return json(
-      response,
-      status,
-      {
-        error:
-          error.message
-      }
-    );
+    return json(response, status, {
+      error: error.message
+    });
   }
 }
 
 function json(response, status, value) {
-  response.writeHead(
-    status,
-    {
-      'content-type':
-        'application/json; charset=utf-8'
-    }
-  );
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8'
+  });
 
-  response.end(
-    JSON.stringify(
-      value,
-      null,
-      2
-    )
-  );
+  response.end(JSON.stringify(value, null, 2));
 }
 
-async function sendFile(
-  response,
-  file,
-  contentType
-) {
-  const content =
-    await fs.readFile(file);
+async function sendFile(response, file, contentType) {
+  const content = await fs.readFile(file);
 
-  response.writeHead(
-    200,
-    {
-      'content-type':
-        contentType,
-      'cache-control':
-        'no-cache'
-    }
-  );
+  response.writeHead(200, {
+    'content-type': contentType,
+    'cache-control': 'no-cache'
+  });
 
   response.end(content);
 }
@@ -476,10 +224,7 @@ async function sendFile(
 async function readJson(request) {
   const chunks = [];
 
-  for await (
-    const chunk
-    of request
-  ) {
+  for await (const chunk of request) {
     chunks.push(chunk);
   }
 
@@ -487,10 +232,7 @@ async function readJson(request) {
     return {};
   }
 
-  return JSON.parse(
-    Buffer.concat(chunks)
-      .toString('utf8')
-  );
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
 module.exports = {

@@ -28,128 +28,135 @@ const elements = {
   uploadFile: document.querySelector('#upload-file'),
   selectedFile: document.querySelector('#selected-file'),
   uploadButton: document.querySelector('#upload-button'),
-  uploadMessage: document.querySelector('#upload-message')
+  uploadMessage: document.querySelector('#upload-message'),
+  uploadPlacement: document.querySelector('#upload-placement'),
+  placementFile: document.querySelector('#placement-file'),
+  placementHash: document.querySelector('#placement-hash'),
+  placementNodes: document.querySelector('#placement-nodes')
 };
 
 let refreshing = false;
 let catalogRefreshing = false;
 
 function address(node) {
-  return node
-    ? `${node.host}:${node.port}`
-    : 'Não definido';
+  return node ? `${node.host}:${node.port}` : 'Não definido';
 }
 
-function renderNode(
-  targetId,
-  targetAddress,
-  node
-) {
-  targetId.textContent =
-    node?.id ?? '—';
+function renderFilePlacement(result) {
+  const replicas = result.replicas || [];
 
-  targetAddress.textContent =
-    address(node);
+  const locations = [
+    {
+      role: 'Proprietário',
+      node: result.node,
+      ok: true
+    },
+    ...replicas.map((replica) => ({
+      role: 'Réplica',
+      node: replica.node,
+      ok: replica.ok,
+      error: replica.error,
+      updated: replica.updated
+    }))
+  ];
+
+  elements.placementFile.textContent = result.name;
+
+  elements.placementHash.textContent = `Hash Chord: ${result.hashId}`;
+
+  elements.placementNodes.replaceChildren(
+    ...locations.map((location) => {
+      const card = document.createElement('article');
+
+      card.className = `placement-node ${location.ok ? 'stored' : 'failed'}`;
+
+      const role = document.createElement('span');
+
+      role.className = 'placement-role';
+
+      role.textContent = location.role;
+
+      const title = document.createElement('strong');
+
+      title.textContent = location.node ? `Nó ${location.node.id}` : 'Nó indisponível';
+
+      const detail = document.createElement('small');
+
+      detail.textContent = location.ok
+        ? `${address(location.node)} · ${location.updated === false ? 'cópia já atualizada' : 'arquivo armazenado'}`
+        : `${address(location.node)} · falha: ${location.error || 'erro desconhecido'}`;
+
+      card.append(role, title, detail);
+
+      return card;
+    })
+  );
+
+  elements.uploadPlacement.hidden = false;
+}
+
+function renderNode(targetId, targetAddress, node) {
+  targetId.textContent = node?.id ?? '—';
+
+  targetAddress.textContent = address(node);
 }
 
 function renderRing(state) {
-  const routeIds = new Set(
-    state.fingerTable.flatMap(
-      (finger) =>
-        finger.node
-          ? [finger.node.id]
-          : []
-    )
-  );
+  const routeIds = new Set(state.fingerTable.flatMap((finger) => (finger.node ? [finger.node.id] : [])));
 
   if (state.predecessor) {
-    routeIds.add(
-      state.predecessor.id
-    );
+    routeIds.add(state.predecessor.id);
   }
 
   if (state.successor) {
-    routeIds.add(
-      state.successor.id
-    );
+    routeIds.add(state.successor.id);
   }
 
   elements.ring.replaceChildren(
-    ...Array.from(
-      { length: 32 },
-      (_, index) => {
-        const id =
-          index + 1;
+    ...Array.from({ length: 32 }, (_, index) => {
+      const id = index + 1;
 
-        const angle =
-          ((id - 1) / 32) * 360 - 90;
+      const angle = ((id - 1) / 32) * 360 - 90;
 
-        const marker =
-          document.createElement('span');
+      const marker = document.createElement('span');
 
-        marker.className =
-          `ring-id${routeIds.has(id) ? ' route' : ''}` +
-          `${id === state.node.id ? ' self' : ''}`;
+      marker.className = `ring-id${routeIds.has(id) ? ' route' : ''}` + `${id === state.node.id ? ' self' : ''}`;
 
-        marker.textContent =
-          id;
+      marker.textContent = id;
 
-        marker.title =
-          id === state.node.id
-            ? `Nó atual: ${id}`
-            : `ID ${id}`;
+      marker.title = id === state.node.id ? `Nó atual: ${id}` : `ID ${id}`;
 
-        marker.style.transform =
-          `rotate(${angle}deg) ` +
-          `translateX(var(--ring-radius)) ` +
-          `rotate(${-angle}deg)`;
+      marker.style.transform = `rotate(${angle}deg) ` + `translateX(var(--ring-radius)) ` + `rotate(${-angle}deg)`;
 
-        return marker;
-      }
-    )
+      return marker;
+    })
   );
 }
 
 function renderTable(fingers) {
   elements.fingerBody.replaceChildren(
     ...fingers.map((finger) => {
-      const row =
-        document.createElement('tr');
+      const row = document.createElement('tr');
 
-      const values = [
-        finger.index,
-        finger.start,
-        finger.node?.id ?? '—',
-        address(finger.node)
-      ];
+      const values = [finger.index, finger.start, finger.node?.id ?? '—', address(finger.node)];
 
-      values.forEach(
-        (value, index) => {
-          const cell =
-            document.createElement('td');
+      values.forEach((value, index) => {
+        const cell = document.createElement('td');
 
-          if (
-            index === 2 &&
-            finger.node
-          ) {
-            const badge =
-              document.createElement('span');
+        if (index === 2 && finger.node) {
+          const badge = document.createElement('span');
 
-            badge.className =
-              'node-badge';
+          badge.className = 'node-badge';
 
-            badge.textContent =
-              value;
+          badge.textContent = value;
 
-            cell.append(badge);
-          } else {
-            cell.textContent =
-              value;
-          }
-
-          row.append(cell);
+          cell.append(badge);
+        } else {
+          cell.textContent = value;
         }
-      );
+
+        row.append(cell);
+      });
 
       return row;
     })
@@ -157,202 +164,124 @@ function renderTable(fingers) {
 }
 
 function render(state) {
-  elements.nodeTitle.textContent =
-    state.node.id;
+  elements.nodeTitle.textContent = state.node.id;
 
-  elements.currentId.textContent =
-    state.node.id;
+  elements.currentId.textContent = state.node.id;
 
-  elements.nodeAddress.textContent =
-    `http://${address(state.node)}`;
+  elements.nodeAddress.textContent = `http://${address(state.node)}`;
 
-  elements.joinedLabel.textContent =
-    state.joined
-      ? 'No anel'
-      : 'Fora do anel';
+  elements.joinedLabel.textContent = state.joined ? 'No anel' : 'Fora do anel';
 
-  elements.joinedLabel.classList.toggle(
-    'active',
-    state.joined
-  );
+  elements.joinedLabel.classList.toggle('active', state.joined);
 
-  elements.joinPanel.hidden =
-    state.joined;
+  elements.joinPanel.hidden = state.joined;
 
-  elements.filesPanel.hidden =
-    !state.joined;
+  elements.filesPanel.hidden = !state.joined;
 
-  renderNode(
-    elements.predecessorId,
-    elements.predecessorAddress,
-    state.predecessor
-  );
+  renderNode(elements.predecessorId, elements.predecessorAddress, state.predecessor);
 
-  renderNode(
-    elements.successorId,
-    elements.successorAddress,
-    state.successor
-  );
+  renderNode(elements.successorId, elements.successorAddress, state.successor);
 
-  renderTable(
-    state.fingerTable
-  );
+  renderTable(state.fingerTable);
 
   renderRing(state);
 
-  elements.lastUpdate.textContent =
-    `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
+  elements.lastUpdate.textContent = `Atualizado às ${new Date().toLocaleTimeString('pt-BR')}`;
 }
 
 function renderCatalog(names) {
   if (names.length === 0) {
-    elements.catalogList.innerHTML =
-      '<p class="empty-row">' +
-      'Nenhum arquivo foi inserido na rede.' +
-      '</p>';
+    elements.catalogList.innerHTML = '<p class="empty-row">' + 'Nenhum arquivo foi inserido na rede.' + '</p>';
 
     return;
   }
 
   elements.catalogList.replaceChildren(
     ...names.map((name) => {
-      const link =
-        document.createElement('a');
+      const link = document.createElement('a');
 
-      link.className =
-        'catalog-file';
+      link.className = 'catalog-file';
 
-      link.href =
-        '#';
+      link.href = '#';
 
-      const icon =
-        document.createElement('span');
+      const icon = document.createElement('span');
 
-      icon.className =
-        'file-icon';
+      icon.className = 'file-icon';
 
-      icon.textContent =
-        '↓';
+      icon.textContent = '↓';
 
-      const label =
-        document.createElement('span');
+      const label = document.createElement('span');
 
-      label.textContent =
-        name;
+      label.textContent = name;
 
-      const action =
-        document.createElement('small');
+      const action = document.createElement('small');
 
-      action.textContent =
-        'Baixar';
+      action.textContent = 'Baixar';
 
-      link.append(
-        icon,
-        label,
-        action
-      );
+      link.append(icon, label, action);
 
-      link.addEventListener(
-        'click',
-        async (event) => {
-          event.preventDefault();
+      link.addEventListener('click', async (event) => {
+        event.preventDefault();
 
-          action.textContent =
-            'Buscando…';
+        action.textContent = 'Buscando…';
 
-          try {
-            const response =
-              await fetch(
-                `/api/files?name=${encodeURIComponent(name)}`,
-                {
-                  cache: 'no-store'
-                }
-              );
+        try {
+          const response = await fetch(`/api/files?name=${encodeURIComponent(name)}`, {
+            cache: 'no-store'
+          });
 
-            if (!response.ok) {
-              let message =
-                `Falha HTTP ${response.status}`;
+          if (!response.ok) {
+            let message = `Falha HTTP ${response.status}`;
 
-              try {
-                const errorBody =
-                  await response.json();
+            try {
+              const errorBody = await response.json();
 
-                message =
-                  errorBody.error ||
-                  message;
-              } catch {
-              }
+              message = errorBody.error || message;
+            } catch {}
 
-              throw new Error(message);
-            }
-
-            const blob =
-              await response.blob();
-
-            const objectUrl =
-              URL.createObjectURL(blob);
-
-            const download =
-              document.createElement('a');
-
-            download.href =
-              objectUrl;
-
-            download.download =
-              name;
-
-            document.body.append(download);
-
-            download.click();
-
-            download.remove();
-
-            setTimeout(
-              () =>
-                URL.revokeObjectURL(
-                  objectUrl
-                ),
-              1000
-            );
-
-            const owner =
-              response.headers.get(
-                'x-chord-owner-node-id'
-              );
-
-            const servedBy =
-              response.headers.get(
-                'x-chord-served-by-node-id'
-              );
-
-            const fromReplica =
-              response.headers.get(
-                'x-chord-from-replica'
-              ) === 'true';
-
-            elements.uploadMessage.className =
-              'form-message';
-
-            if (fromReplica) {
-              elements.uploadMessage.textContent =
-                `Arquivo "${name}" recuperado pela réplica do nó ${servedBy}. ` +
-                `O proprietário lógico era o nó ${owner}.`;
-            } else {
-              elements.uploadMessage.textContent =
-                `Arquivo "${name}" baixado do proprietário nó ${owner}.`;
-            }
-          } catch (error) {
-            elements.uploadMessage.className =
-              'form-message error';
-
-            elements.uploadMessage.textContent =
-              `Não foi possível baixar "${name}": ${error.message}`;
-          } finally {
-            action.textContent =
-              'Baixar';
+            throw new Error(message);
           }
+
+          const blob = await response.blob();
+
+          const objectUrl = URL.createObjectURL(blob);
+
+          const download = document.createElement('a');
+
+          download.href = objectUrl;
+
+          download.download = name;
+
+          document.body.append(download);
+
+          download.click();
+
+          download.remove();
+
+          setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+
+          const owner = response.headers.get('x-chord-owner-node-id');
+
+          const servedBy = response.headers.get('x-chord-served-by-node-id');
+
+          const fromReplica = response.headers.get('x-chord-from-replica') === 'true';
+
+          elements.uploadMessage.className = 'form-message';
+
+          if (fromReplica) {
+            elements.uploadMessage.textContent =
+              `Arquivo "${name}" recuperado pela réplica do nó ${servedBy}. ` + `O proprietário lógico era o nó ${owner}.`;
+          } else {
+            elements.uploadMessage.textContent = `Arquivo "${name}" baixado do proprietário nó ${owner}.`;
+          }
+        } catch (error) {
+          elements.uploadMessage.className = 'form-message error';
+
+          elements.uploadMessage.textContent = `Não foi possível baixar "${name}": ${error.message}`;
+        } finally {
+          action.textContent = 'Baixar';
         }
-      );
+      });
 
       return link;
     })
@@ -360,24 +289,16 @@ function renderCatalog(names) {
 }
 
 async function refreshCatalog() {
-  if (
-    catalogRefreshing ||
-    elements.filesPanel.hidden
-  ) {
+  if (catalogRefreshing || elements.filesPanel.hidden) {
     return;
   }
 
-  catalogRefreshing =
-    true;
+  catalogRefreshing = true;
 
   try {
-    const response =
-      await fetch(
-        '/api/files?name=catalogo.txt',
-        {
-          cache: 'no-store'
-        }
-      );
+    const response = await fetch('/api/files?name=catalogo.txt', {
+      cache: 'no-store'
+    });
 
     if (response.status === 404) {
       renderCatalog([]);
@@ -385,69 +306,38 @@ async function refreshCatalog() {
     }
 
     if (!response.ok) {
-      throw new Error(
-        `Falha HTTP ${response.status}`
-      );
+      throw new Error(`Falha HTTP ${response.status}`);
     }
 
-    const names =
-      (await response.text())
-        .split(/\r?\n/)
-        .filter(Boolean);
+    const names = (await response.text()).split(/\r?\n/).filter(Boolean);
 
     renderCatalog(names);
   } catch (error) {
     elements.catalogList.innerHTML =
-      `<p class="global-error">` +
-      `Não foi possível carregar o catálogo: ` +
-      `${escapeHtml(error.message)}` +
-      `</p>`;
+      `<p class="global-error">` + `Não foi possível carregar o catálogo: ` + `${escapeHtml(error.message)}` + `</p>`;
   } finally {
-    catalogRefreshing =
-      false;
+    catalogRefreshing = false;
   }
 }
 
 function escapeHtml(value) {
-  const element =
-    document.createElement('span');
+  const element = document.createElement('span');
 
-  element.textContent =
-    value;
+  element.textContent = value;
 
   return element.innerHTML;
 }
 
 function fileAsBase64(file) {
-  return new Promise(
-    (resolve, reject) => {
-      const reader =
-        new FileReader();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
 
-      reader.addEventListener(
-        'load',
-        () =>
-          resolve(
-            String(reader.result)
-              .split(',', 2)[1] ||
-            ''
-          )
-      );
+    reader.addEventListener('load', () => resolve(String(reader.result).split(',', 2)[1] || ''));
 
-      reader.addEventListener(
-        'error',
-        () =>
-          reject(
-            reader.error ||
-            new Error(
-              'Não foi possível ler o arquivo'
-            )
-          )
-      );
+    reader.addEventListener('error', () => reject(reader.error || new Error('Não foi possível ler o arquivo')));
 
-      reader.readAsDataURL(file);
-    }
-  );
+    reader.readAsDataURL(file);
+  });
 }
 
 async function refresh() {
@@ -455,310 +345,187 @@ async function refresh() {
     return;
   }
 
-  refreshing =
-    true;
+  refreshing = true;
 
   try {
-    const response =
-      await fetch(
-        '/api/state',
-        {
-          cache: 'no-store'
-        }
-      );
+    const response = await fetch('/api/state', {
+      cache: 'no-store'
+    });
 
     if (!response.ok) {
-      throw new Error(
-        `Falha HTTP ${response.status}`
-      );
+      throw new Error(`Falha HTTP ${response.status}`);
     }
 
-    render(
-      await response.json()
-    );
+    render(await response.json());
 
     refreshCatalog();
 
-    elements.connectionDot.classList.add(
-      'online'
-    );
+    elements.connectionDot.classList.add('online');
 
-    elements.connectionLabel.textContent =
-      'Nó acessível';
+    elements.connectionLabel.textContent = 'Nó acessível';
 
-    elements.globalError.hidden =
-      true;
+    elements.globalError.hidden = true;
   } catch (error) {
-    elements.connectionDot.classList.remove(
-      'online'
-    );
+    elements.connectionDot.classList.remove('online');
 
-    elements.connectionLabel.textContent =
-      'Sem conexão';
+    elements.connectionLabel.textContent = 'Sem conexão';
 
-    elements.globalError.textContent =
-      `Não foi possível consultar o nó: ${error.message}`;
+    elements.globalError.textContent = `Não foi possível consultar o nó: ${error.message}`;
 
-    elements.globalError.hidden =
-      false;
+    elements.globalError.hidden = false;
   } finally {
-    refreshing =
-      false;
+    refreshing = false;
   }
 }
 
-document
-  .querySelectorAll(
-    'input[name="mode"]'
-  )
-  .forEach((input) => {
-    input.addEventListener(
-      'change',
-      () => {
-        const existing =
-          input.value === 'existing' &&
-          input.checked;
+document.querySelectorAll('input[name="mode"]').forEach((input) => {
+  input.addEventListener('change', () => {
+    const existing = input.value === 'existing' && input.checked;
 
-        if (!input.checked) {
-          return;
-        }
-
-        elements.bootstrapFields.hidden =
-          !existing;
-
-        elements.joinButton.textContent =
-          existing
-            ? 'Entrar no anel'
-            : 'Criar anel';
-      }
-    );
-  });
-
-elements.joinForm.addEventListener(
-  'submit',
-  async (event) => {
-    event.preventDefault();
-
-    elements.joinButton.disabled =
-      true;
-
-    elements.joinMessage.className =
-      'form-message';
-
-    elements.joinMessage.textContent =
-      'Conectando…';
-
-    const existing =
-      document.querySelector(
-        'input[name="mode"]:checked'
-      ).value === 'existing';
-
-    const bootstrap =
-      existing
-        ? {
-          id: Number(
-            document.querySelector(
-              '#bootstrap-id'
-            ).value
-          ),
-
-          host: document.querySelector(
-            '#bootstrap-host'
-          ).value.trim(),
-
-          port: Number(
-            document.querySelector(
-              '#bootstrap-port'
-            ).value
-          )
-        }
-        : null;
-
-    try {
-      const response =
-        await fetch(
-          '/join',
-          {
-            method: 'POST',
-
-            headers: {
-              'content-type':
-                'application/json'
-            },
-
-            body:
-              JSON.stringify({
-                bootstrap
-              })
-          }
-        );
-
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-          'Não foi possível entrar no anel'
-        );
-      }
-
-      const migrated =
-        result.migration || [];
-
-      elements.joinMessage.textContent =
-        migrated.length > 0
-          ? `Nó conectado. ${migrated.length} arquivo(s) migrado(s) para este nó.`
-          : 'Nó conectado com sucesso.';
-
-      render(result);
-    } catch (error) {
-      elements.joinMessage.className =
-        'form-message error';
-
-      elements.joinMessage.textContent =
-        error.message;
-    } finally {
-      elements.joinButton.disabled =
-        false;
-    }
-  }
-);
-
-elements.refreshButton.addEventListener(
-  'click',
-  refresh
-);
-
-elements.filesRefreshButton.addEventListener(
-  'click',
-  refreshCatalog
-);
-
-elements.uploadFile.addEventListener(
-  'change',
-  () => {
-    elements.selectedFile.textContent =
-      elements.uploadFile.files[0]?.name ||
-      'Nenhum arquivo selecionado';
-  }
-);
-
-elements.uploadForm.addEventListener(
-  'submit',
-  async (event) => {
-    event.preventDefault();
-
-    const file =
-      elements.uploadFile.files[0];
-
-    if (!file) {
+    if (!input.checked) {
       return;
     }
 
-    elements.uploadButton.disabled =
-      true;
+    elements.bootstrapFields.hidden = !existing;
 
-    elements.uploadMessage.className =
-      'form-message';
+    elements.joinButton.textContent = existing ? 'Entrar no anel' : 'Criar anel';
+  });
+});
 
-    elements.uploadMessage.textContent =
-      'Enviando…';
+elements.joinForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
 
-    try {
-      const response =
-        await fetch(
-          '/api/files',
-          {
-            method: 'POST',
+  elements.joinButton.disabled = true;
 
-            headers: {
-              'content-type':
-                'application/json'
-            },
+  elements.joinMessage.className = 'form-message';
 
-            body: JSON.stringify({
-              name: file.name,
-              content:
-                await fileAsBase64(file),
-              encoding: 'base64'
-            })
-          }
-        );
+  elements.joinMessage.textContent = 'Conectando…';
 
-      const result =
-        await response.json();
+  const existing = document.querySelector('input[name="mode"]:checked').value === 'existing';
 
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-          'Não foi possível enviar o arquivo'
-        );
+  const bootstrap = existing
+    ? {
+        id: Number(document.querySelector('#bootstrap-id').value),
+
+        host: document.querySelector('#bootstrap-host').value.trim(),
+
+        port: Number(document.querySelector('#bootstrap-port').value)
       }
+    : null;
 
-      const successfulReplicas =
-        (result.replicas || [])
-          .filter(
-            (replica) =>
-              replica.ok
-          );
+  try {
+    const response = await fetch('/join', {
+      method: 'POST',
 
-      const replicaIds =
-        successfulReplicas
-          .map(
-            (replica) =>
-              replica.node.id
-          );
+      headers: {
+        'content-type': 'application/json'
+      },
 
-      const failedReplicas =
-        (result.replicas || [])
-          .filter(
-            (replica) =>
-              !replica.ok
-          );
+      body: JSON.stringify({
+        bootstrap
+      })
+    });
 
-      let message =
-        `Arquivo armazenado no nó ${result.node.id} ` +
-        `(hash ${result.hashId}). `;
+    const result = await response.json();
 
-      message +=
-        replicaIds.length > 0
-          ? `Réplicas nos nós: ${replicaIds.join(', ')}.`
-          : 'Nenhuma réplica necessária.';
-
-      if (failedReplicas.length > 0) {
-        message +=
-          ` Falha em ${failedReplicas.length} réplica(s).`;
-      }
-
-      elements.uploadMessage.textContent =
-        message;
-
-      elements.uploadForm.reset();
-
-      elements.selectedFile.textContent =
-        'Nenhum arquivo selecionado';
-
-      await refreshCatalog();
-    } catch (error) {
-      elements.uploadMessage.className =
-        'form-message error';
-
-      elements.uploadMessage.textContent =
-        error.message;
-    } finally {
-      elements.uploadButton.disabled =
-        false;
+    if (!response.ok) {
+      throw new Error(result.error || 'Não foi possível entrar no anel');
     }
+
+    const migrated = result.migration || [];
+
+    elements.joinMessage.textContent =
+      migrated.length > 0 ? `Nó conectado. ${migrated.length} arquivo(s) migrado(s) para este nó.` : 'Nó conectado com sucesso.';
+
+    render(result);
+  } catch (error) {
+    elements.joinMessage.className = 'form-message error';
+
+    elements.joinMessage.textContent = error.message;
+  } finally {
+    elements.joinButton.disabled = false;
   }
-);
+});
+
+elements.refreshButton.addEventListener('click', refresh);
+
+elements.filesRefreshButton.addEventListener('click', refreshCatalog);
+
+elements.uploadFile.addEventListener('change', () => {
+  elements.selectedFile.textContent = elements.uploadFile.files[0]?.name || 'Nenhum arquivo selecionado';
+});
+
+elements.uploadForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+
+  const file = elements.uploadFile.files[0];
+
+  if (!file) {
+    return;
+  }
+
+  elements.uploadButton.disabled = true;
+
+  elements.uploadMessage.className = 'form-message';
+
+  elements.uploadMessage.textContent = 'Enviando…';
+
+  try {
+    const response = await fetch('/api/files', {
+      method: 'POST',
+
+      headers: {
+        'content-type': 'application/json'
+      },
+
+      body: JSON.stringify({
+        name: file.name,
+        content: await fileAsBase64(file),
+        encoding: 'base64'
+      })
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Não foi possível enviar o arquivo');
+    }
+
+    const successfulReplicas = (result.replicas || []).filter((replica) => replica.ok);
+
+    const replicaIds = successfulReplicas.map((replica) => replica.node.id);
+
+    const failedReplicas = (result.replicas || []).filter((replica) => !replica.ok);
+
+    let message = `Arquivo armazenado no nó ${result.node.id} ` + `(hash ${result.hashId}). `;
+
+    message += replicaIds.length > 0 ? `Réplicas nos nós: ${replicaIds.join(', ')}.` : 'Nenhuma réplica necessária.';
+
+    if (failedReplicas.length > 0) {
+      message += ` Falha em ${failedReplicas.length} réplica(s).`;
+    }
+
+    elements.uploadMessage.textContent = message;
+
+    renderFilePlacement(result);
+
+    elements.uploadForm.reset();
+
+    elements.selectedFile.textContent = 'Nenhum arquivo selecionado';
+
+    await refreshCatalog();
+  } catch (error) {
+    elements.uploadMessage.className = 'form-message error';
+
+    elements.uploadMessage.textContent = error.message;
+  } finally {
+    elements.uploadButton.disabled = false;
+  }
+});
 
 refresh();
 
-setInterval(
-  () => {
-    refresh();
-    refreshCatalog();
-  },
-  5000
-);
+setInterval(() => {
+  refresh();
+  refreshCatalog();
+}, 5000);

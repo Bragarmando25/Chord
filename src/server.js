@@ -19,293 +19,156 @@ const STATIC_FILES = {
 
 const server = http.createServer(async (request, response) => {
   try {
-    const url = new URL(
-      request.url,
-      `http://${request.headers.host}`
-    );
+    const url = new URL(request.url, `http://${request.headers.host}`);
 
-    if (
-      request.method === 'GET' &&
-      STATIC_FILES[url.pathname]
-    ) {
-      const [file, contentType] =
-        STATIC_FILES[url.pathname];
+    if (request.method === 'GET' && STATIC_FILES[url.pathname]) {
+      const [file, contentType] = STATIC_FILES[url.pathname];
 
-      return sendFile(
-        response,
-        path.join(PUBLIC_DIRECTORY, file),
-        contentType
-      );
+      return sendFile(response, path.join(PUBLIC_DIRECTORY, file), contentType);
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/api/nodes'
-    ) {
+    if (request.method === 'GET' && url.pathname === '/api/nodes') {
       return json(
         response,
         200,
-        Array.from(
-          nodes.values(),
-          ({ node }) => node.state()
-        )
+        Array.from(nodes.values(), ({ node }) => node.state())
       );
     }
 
-    if (
-      request.method === 'GET' &&
-      url.pathname === '/api/network'
-    ) {
-      const addresses =
-        localIPv4Addresses();
+    if (request.method === 'GET' && url.pathname === '/api/network') {
+      const addresses = localIPv4Addresses();
 
-      const requestedHost =
-        request.headers.host?.replace(
-          /:\d+$/,
-          ''
-        );
+      const requestedHost = request.headers.host?.replace(/:\d+$/, '');
 
-      const suggestedHost =
-        isLoopback(requestedHost)
-          ? addresses[0]
-          : requestedHost;
+      const suggestedHost = isLoopback(requestedHost) ? addresses[0] : requestedHost;
 
-      return json(
-        response,
-        200,
-        {
-          addresses,
-          suggestedHost:
-            suggestedHost ||
-            addresses[0] ||
-            '127.0.0.1'
-        }
-      );
+      return json(response, 200, {
+        addresses,
+        suggestedHost: suggestedHost || addresses[0] || '127.0.0.1'
+      });
     }
 
-    if (
-      request.method === 'POST' &&
-      url.pathname === '/api/nodes'
-    ) {
-      const body =
-        await readJson(request);
+    if (request.method === 'POST' && url.pathname === '/api/nodes') {
+      const body = await readJson(request);
 
-      const port =
-        Number(body.port);
+      const port = Number(body.port);
 
       if (port === CONTROL_PORT) {
-        throw new Error(
-          `A porta ${CONTROL_PORT} pertence ao painel; escolha outra porta`
-        );
+        throw new Error(`A porta ${CONTROL_PORT} pertence ao painel; escolha outra porta`);
       }
 
       if (nodes.has(port)) {
-        throw new Error(
-          `Já existe um nó local na porta ${port}`
-        );
+        throw new Error(`Já existe um nó local na porta ${port}`);
       }
 
-      if (
-        Array.from(nodes.values())
-          .some(
-            ({ node }) =>
-              node.id === Number(body.id)
-          )
-      ) {
-        throw new Error(
-          `O ID ${body.id} já está sendo usado localmente`
-        );
+      if (Array.from(nodes.values()).some(({ node }) => node.id === Number(body.id))) {
+        throw new Error(`O ID ${body.id} já está sendo usado localmente`);
       }
 
-      const running =
-        await startNodeServer({
-          id: body.id,
-          host: body.host,
-          port
-        });
+      const running = await startNodeServer({
+        id: body.id,
+        host: body.host,
+        port
+      });
 
       try {
-        const joinResult =
-          await running.node.join(
-            body.bootstrap || null
-          );
+        const joinResult = await running.node.join(body.bootstrap || null);
 
-        nodes.set(
-          port,
-          running
-        );
+        nodes.set(port, running);
 
-        return json(
-          response,
-          201,
-          {
-            ...running.node.state(),
-            migration:
-              joinResult.migration || []
-          }
-        );
+        return json(response, 201, {
+          ...running.node.state(),
+          migration: joinResult.migration || []
+        });
       } catch (error) {
         await running.close();
         throw error;
       }
     }
 
-    if (
-      request.method === 'DELETE' &&
-      url.pathname === '/api/nodes'
-    ) {
-      const port =
-        Number(
-          url.searchParams.get('port')
-        );
+    if (request.method === 'DELETE' && url.pathname === '/api/nodes') {
+      const port = Number(url.searchParams.get('port'));
 
       if (!Number.isInteger(port)) {
-        throw new Error(
-          'Informe a porta do nó que deve ser desligado'
-        );
+        throw new Error('Informe a porta do nó que deve ser desligado');
       }
 
-      const running =
-        nodes.get(port);
+      const running = nodes.get(port);
 
       if (!running) {
-        throw new Error(
-          `Nenhum nó ativo na porta ${port}`
-        );
+        throw new Error(`Nenhum nó ativo na porta ${port}`);
       }
+
+      const simulateFailure = url.searchParams.get('mode') === 'crash';
+
+      const leaveResult = simulateFailure ? { transferred: [] } : await running.node.leave();
 
       await running.close();
 
       nodes.delete(port);
 
       console.log(
-        `Nó ${running.node.id} na porta ${port} foi desligado.`
+        simulateFailure
+          ? `Falha abrupta simulada no nó ${running.node.id}, porta ${port}.`
+          : `Nó ${running.node.id} na porta ${port} foi desligado.`
       );
 
-      return json(
-        response,
-        200,
-        {
-          ok: true,
-          nodeId:
-            running.node.id,
-          port
-        }
-      );
+      return json(response, 200, {
+        ok: true,
+        nodeId: running.node.id,
+        port,
+        simulatedFailure: simulateFailure,
+        transferred: leaveResult.transferred || []
+      });
     }
 
-    return json(
-      response,
-      404,
-      {
-        error:
-          'Rota não encontrada'
-      }
-    );
+    return json(response, 404, {
+      error: 'Rota não encontrada'
+    });
   } catch (error) {
-    return json(
-      response,
-      400,
-      {
-        error:
-          error.message
-      }
-    );
+    return json(response, 400, {
+      error: error.message
+    });
   }
 });
 
-server.listen(
-  CONTROL_PORT,
-  '0.0.0.0',
-  () => {
-    const addresses =
-      localIPv4Addresses();
+server.listen(CONTROL_PORT, '0.0.0.0', () => {
+  const addresses = localIPv4Addresses();
 
-    console.log(
-      `Painel Chord local: http://127.0.0.1:${CONTROL_PORT}`
-    );
+  console.log(`Painel Chord local: http://127.0.0.1:${CONTROL_PORT}`);
 
-    for (
-      const address
-      of addresses
-    ) {
-      console.log(
-        `Painel Chord na rede: http://${address}:${CONTROL_PORT}`
-      );
-    }
+  for (const address of addresses) {
+    console.log(`Painel Chord na rede: http://${address}:${CONTROL_PORT}`);
   }
-);
+});
 
 function localIPv4Addresses() {
-  return Object.values(
-    os.networkInterfaces()
-  )
+  return Object.values(os.networkInterfaces())
     .flat()
-    .filter(
-      (entry) =>
-        entry &&
-        entry.family === 'IPv4' &&
-        !entry.internal
-    )
-    .map(
-      (entry) =>
-        entry.address
-    )
-    .sort(
-      (left, right) =>
-        Number(
-          !left.startsWith('172.16.')
-        ) -
-        Number(
-          !right.startsWith('172.16.')
-        )
-    );
+    .filter((entry) => entry && entry.family === 'IPv4' && !entry.internal)
+    .map((entry) => entry.address)
+    .sort((left, right) => Number(!left.startsWith('172.16.')) - Number(!right.startsWith('172.16.')));
 }
 
 function isLoopback(host) {
-  return (
-    !host ||
-    host === 'localhost' ||
-    host === '127.0.0.1' ||
-    host === '[::1]'
-  );
+  return !host || host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
 }
 
 function json(response, status, value) {
-  response.writeHead(
-    status,
-    {
-      'content-type':
-        'application/json; charset=utf-8'
-    }
-  );
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8'
+  });
 
-  response.end(
-    JSON.stringify(
-      value,
-      null,
-      2
-    )
-  );
+  response.end(JSON.stringify(value, null, 2));
 }
 
-async function sendFile(
-  response,
-  file,
-  contentType
-) {
-  const content =
-    await fs.readFile(file);
+async function sendFile(response, file, contentType) {
+  const content = await fs.readFile(file);
 
-  response.writeHead(
-    200,
-    {
-      'content-type':
-        contentType,
-      'cache-control':
-        'no-cache'
-    }
-  );
+  response.writeHead(200, {
+    'content-type': contentType,
+    'cache-control': 'no-cache'
+  });
 
   response.end(content);
 }
@@ -313,10 +176,7 @@ async function sendFile(
 async function readJson(request) {
   const chunks = [];
 
-  for await (
-    const chunk
-    of request
-  ) {
+  for await (const chunk of request) {
     chunks.push(chunk);
   }
 
@@ -324,8 +184,5 @@ async function readJson(request) {
     return {};
   }
 
-  return JSON.parse(
-    Buffer.concat(chunks)
-      .toString('utf8')
-  );
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }

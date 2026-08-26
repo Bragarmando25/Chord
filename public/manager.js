@@ -14,20 +14,16 @@ async function fillNetworkDefaults() {
       return;
     }
 
-    const { suggestedHost } =
-      await response.json();
+    const { suggestedHost } = await response.json();
 
     if (!suggestedHost) {
       return;
     }
 
-    document.querySelector('#node-host').value =
-      suggestedHost;
+    document.querySelector('#node-host').value = suggestedHost;
 
-    document.querySelector('#target-host').value =
-      suggestedHost;
-  } catch {
-  }
+    document.querySelector('#target-host').value = suggestedHost;
+  } catch {}
 }
 
 function nodeAddress(node) {
@@ -35,79 +31,53 @@ function nodeAddress(node) {
 }
 
 function createStopButton(state) {
-  const stopButton =
-    document.createElement('button');
+  const stopButton = document.createElement('button');
 
-  stopButton.className =
-    'button secondary';
+  stopButton.className = 'button secondary';
 
-  stopButton.type =
-    'button';
+  stopButton.type = 'button';
 
-  stopButton.textContent =
-    'Desligar';
+  stopButton.textContent = 'Desligar';
 
-  stopButton.addEventListener(
-    'click',
-    async () => {
-      stopButton.disabled =
-        true;
+  stopButton.addEventListener('click', async () => {
+    stopButton.disabled = true;
 
-      try {
-        const response =
-          await fetch(
-            `/api/nodes?port=${state.node.port}`,
-            {
-              method: 'DELETE'
-            }
-          );
+    try {
+      const response = await fetch(`/api/nodes?port=${state.node.port}`, {
+        method: 'DELETE'
+      });
 
-        const result =
-          await response.json();
+      const result = await response.json();
 
-        if (!response.ok) {
-          throw new Error(
-            result.error ||
-            'Não foi possível desligar o nó'
-          );
-        }
-
-        message.className =
-          'form-message';
-
-        message.textContent =
-          `Nó ${result.nodeId} desligado. ` +
-          `A queda pode ser usada para testar as réplicas.`;
-
-        await loadNodes();
-      } catch (error) {
-        message.className =
-          'form-message error';
-
-        message.textContent =
-          error.message;
-
-        stopButton.disabled =
-          false;
+      if (!response.ok) {
+        throw new Error(result.error || 'Não foi possível desligar o nó');
       }
+
+      message.className = 'form-message';
+
+      message.textContent = `Nó ${result.nodeId} desligado. ` + `A queda pode ser usada para testar as réplicas.`;
+
+      await loadNodes();
+    } catch (error) {
+      message.className = 'form-message error';
+
+      message.textContent = error.message;
+
+      stopButton.disabled = false;
     }
-  );
+  });
 
   return stopButton;
 }
 
 function createNodeCard(state) {
-  const card =
-    document.createElement('article');
+  const card = document.createElement('article');
 
-  card.className =
-    'node-card';
+  card.className = 'node-card';
 
-  const predecessor =
-    state.predecessor?.id ?? '—';
+  const predecessor = state.predecessor?.id ?? '—';
 
-  const successor =
-    state.successor?.id ?? '—';
+  const successor = state.successor?.id ?? '—';
 
   card.innerHTML = `
     <div class="node-card-id">${state.node.id}</div>
@@ -125,212 +95,119 @@ function createNodeCard(state) {
       </a>
     </div>`;
 
-  const actions =
-    card.querySelector(
-      '.node-actions'
-    );
+  const actions = card.querySelector('.node-actions');
 
-  actions.style.display =
-    'flex';
+  actions.style.display = 'flex';
 
-  actions.style.gap =
-    '8px';
+  actions.style.gap = '8px';
 
-  actions.append(
-    createStopButton(state)
-  );
+  actions.append(createStopButton(state));
 
   return card;
 }
 
 async function loadNodes() {
   try {
-    const response =
-      await fetch(
-        '/api/nodes',
-        {
-          cache: 'no-store'
-        }
-      );
+    const response = await fetch('/api/nodes', {
+      cache: 'no-store'
+    });
 
-    const nodes =
-      await response.json();
+    const nodes = await response.json();
 
     if (!response.ok) {
-      throw new Error(
-        nodes.error ||
-        'Não foi possível consultar os nós'
-      );
+      throw new Error(nodes.error || 'Não foi possível consultar os nós');
     }
 
     if (!nodes.length) {
-      list.innerHTML =
-        '<p class="empty-row">Nenhum nó foi criado.</p>';
+      list.innerHTML = '<p class="empty-row">Nenhum nó foi criado.</p>';
 
       return;
     }
 
-    list.replaceChildren(
-      ...nodes.map(
-        createNodeCard
-      )
-    );
+    list.replaceChildren(...nodes.map(createNodeCard));
   } catch (error) {
-    list.innerHTML =
-      `<p class="global-error">` +
-      `Erro ao consultar os nós: ${error.message}` +
-      `</p>`;
+    list.innerHTML = `<p class="global-error">` + `Erro ao consultar os nós: ${error.message}` + `</p>`;
   }
 }
 
 function buildNodeRequest() {
-  const joinsExisting =
-    document.querySelector(
-      'input[name="mode"]:checked'
-    ).value === 'join';
+  const joinsExisting = document.querySelector('input[name="mode"]:checked').value === 'join';
 
   return {
-    id: Number(
-      document.querySelector(
-        '#node-id'
-      ).value
-    ),
+    id: Number(document.querySelector('#node-id').value),
 
-    host: document.querySelector(
-      '#node-host'
-    ).value.trim(),
+    host: document.querySelector('#node-host').value.trim(),
 
-    port: Number(
-      document.querySelector(
-        '#node-port'
-      ).value
-    ),
+    port: Number(document.querySelector('#node-port').value),
 
-    bootstrap:
-      joinsExisting
-        ? {
-          id: Number(
-            document.querySelector(
-              '#target-id'
-            ).value
-          ),
+    bootstrap: joinsExisting
+      ? {
+          id: Number(document.querySelector('#target-id').value),
 
-          host: document.querySelector(
-            '#target-host'
-          ).value.trim(),
+          host: document.querySelector('#target-host').value.trim(),
 
-          port: Number(
-            document.querySelector(
-              '#target-port'
-            ).value
-          )
+          port: Number(document.querySelector('#target-port').value)
         }
-        : null
+      : null
   };
 }
 
-document
-  .querySelectorAll(
-    'input[name="mode"]'
-  )
-  .forEach((radio) => {
-    radio.addEventListener(
-      'change',
-      () => {
-        const selected =
-          document.querySelector(
-            'input[name="mode"]:checked'
-          ).value;
+document.querySelectorAll('input[name="mode"]').forEach((radio) => {
+  radio.addEventListener('change', () => {
+    const selected = document.querySelector('input[name="mode"]:checked').value;
 
-        targetFields.hidden =
-          selected !== 'join';
-      }
-    );
+    targetFields.hidden = selected !== 'join';
   });
+});
 
-form.addEventListener(
-  'submit',
-  async (event) => {
-    event.preventDefault();
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
 
-    button.disabled =
-      true;
+  button.disabled = true;
 
-    message.className =
-      'form-message';
+  message.className = 'form-message';
+
+  message.textContent = 'Iniciando…';
+
+  try {
+    const response = await fetch('/api/nodes', {
+      method: 'POST',
+
+      headers: {
+        'content-type': 'application/json'
+      },
+
+      body: JSON.stringify(buildNodeRequest())
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      throw new Error(result.error || 'Não foi possível criar o nó');
+    }
+
+    const migrated = result.migration || [];
 
     message.textContent =
-      'Iniciando…';
+      migrated.length > 0
+        ? `Nó ${result.node.id} iniciado. ${migrated.length} arquivo(s) migrado(s).`
+        : `Nó ${result.node.id} iniciado na porta ${result.node.port}.`;
 
-    try {
-      const response =
-        await fetch(
-          '/api/nodes',
-          {
-            method: 'POST',
+    document.querySelector('#node-port').value = result.node.port + 1;
 
-            headers: {
-              'content-type':
-                'application/json'
-            },
+    await loadNodes();
+  } catch (error) {
+    message.className = 'form-message error';
 
-            body:
-              JSON.stringify(
-                buildNodeRequest()
-              )
-          }
-        );
-
-      const result =
-        await response.json();
-
-      if (!response.ok) {
-        throw new Error(
-          result.error ||
-          'Não foi possível criar o nó'
-        );
-      }
-
-      const migrated =
-        result.migration || [];
-
-      message.textContent =
-        migrated.length > 0
-          ? `Nó ${result.node.id} iniciado. ${migrated.length} arquivo(s) migrado(s).`
-          : `Nó ${result.node.id} iniciado na porta ${result.node.port}.`;
-
-      document.querySelector(
-        '#node-port'
-      ).value =
-        result.node.port + 1;
-
-      await loadNodes();
-    } catch (error) {
-      message.className =
-        'form-message error';
-
-      message.textContent =
-        error.message;
-    } finally {
-      button.disabled =
-        false;
-    }
+    message.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
-);
+});
 
-document
-  .querySelector(
-    '#refresh-button'
-  )
-  .addEventListener(
-    'click',
-    loadNodes
-  );
+document.querySelector('#refresh-button').addEventListener('click', loadNodes);
 
 fillNetworkDefaults();
 loadNodes();
 
-setInterval(
-  loadNodes,
-  5000
-);
+setInterval(loadNodes, 5000);
