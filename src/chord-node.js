@@ -375,6 +375,12 @@ class ChordNode {
         content
       };
     } catch (ownerError) {
+      // Um catálogo ausente antes do primeiro upload representa apenas uma
+      // rede vazia. Como o proprietário respondeu, não há falha a contornar.
+      if (name === CATALOG_NAME && ownerError.code === 'ENOENT') {
+        throw ownerError;
+      }
+
       console.log(`Proprietário ${owner.id} indisponível ou sem o arquivo. ` + `Procurando réplica de "${name}"...`);
 
       const replica = await this.findReplicaInNetwork(owner.id, name);
